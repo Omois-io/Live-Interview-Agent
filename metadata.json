@@ -1,0 +1,8 @@
+{
+  "name": "Interview HUD",
+  "description": "A real-time interview assistant that listens to system audio via Gemini Live API to automatically surface pre-prepared answers.",
+  "requestFramePermissions": [
+    "microphone",
+    "display-capture"
+  ]
+}

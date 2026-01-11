@@ -1,0 +1,7 @@
+Extract all interview questions and answers from the following document:
+
+---
+{{ content }}
+---
+
+Return a JSON array of Q&A pairs with category, question, and answer fields.

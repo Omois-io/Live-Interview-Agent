@@ -1,0 +1,110 @@
+[
+  {
+    "id": "Medicine_is_long_career.md",
+    "category": "Personal",
+    "question": "Medical school is a long journey (8 years). How will you sustain yourself?",
+    "answer": "I've thought about this a lot, and I think it comes down to three things: support, proof that I can do it, and staying grounded outside of medicine.\n\nFor support, I'm fortunate to already have a community at UTSW. I have three close friends in medical school here, five who are residents, and more than fifteen faculty members I've built relationships with through my work. They've been through this. They can give me advice, perspective, and honesty when I need it. That kind of network matters for an eight-year journey.\n\nI also know I can sustain long commitments because I've done it. I've been volunteering in hospitals and doing research for over eight years now. It wasn't always easy, but I kept showing up. That's the same mindset I'll bring to medical school.\n\nAnd outside of medicine, I stay grounded through running. I ran the Disney marathon last month. Training for that taught me how to pace myself, stay disciplined, and keep going when it's hard. My family is also close by in Plano, which means I'll have that support nearby when I need it.\n\nEight years is long. But I have the people, the track record, and the habits to get through it."
+  },
+  {
+    "id": "contribution.md",
+    "category": "Personal",
+    "question": "What would you contribute to our class?",
+    "answer": "I bring a perspective that bridges technology and human connection.\n\nThrough my research at UTSW, I've worked on AI tools for medical education and surgical outcome measurement. I'm comfortable with the technology that's coming into medicine. I can help classmates who feel intimidated by it see it as a tool, not a threat.\n\nAt the same time, I'm the person who reminds the group that behind every data point is a patient's story. My EMT experience, my own background as an immigrant navigating systems I didn't understand, those experiences keep me grounded in why we're doing this.\n\nI also love teaching. I founded a club to teach data science to underserved high school students. I'd want to bring that same energy to helping classmates, whether it's explaining a concept or just being someone people can come to when they're stuck."
+  },
+  {
+    "id": "ethics.md",
+    "category": "Ethics",
+    "question": "Have you ever witnessed something unethical? What did you do?",
+    "answer": "During my time volunteering in the Emergency Department, there was another volunteer named Mark who worked the information desk. His job was to help visitors find patient rooms. But he had a pattern of signing in, disappearing for hours, and coming back just to sign out.\n\nI noticed it was causing problems. Nurses had to stop what they were doing to redirect visitors. Patients wandered the halls alone. One day I helped an elderly woman who had been lost for several minutes looking for her husband's room. Mark's desk was empty.\n\nI wasn't sure if it was my place to say something. I was just a peer. But I decided to talk to him first. I asked if everything was okay, mentioned that patients were getting lost when he stepped away. He shrugged it off. Said he was just taking breaks.\n\nI tried a few more times over the next two weeks. Nothing changed. Then I found a diabetic patient who had been wandering confused for twenty minutes. That was my breaking point. I went to our volunteer coordinator and explained what I'd seen and how it was affecting patients.\n\nShe addressed it. Mark started showing up consistently after that.\n\nLooking back, I wish I had escalated sooner. I was worried about being a troublemaker, but that hesitation let the problem continue. What I learned is that speaking up for patients isn't confrontation. It's part of the job."
+  },
+  {
+    "id": "friends_describe.md",
+    "category": "Personal",
+    "question": "How would your friends describe you?",
+    "answer": "They'd probably call me \"the translator\" or \"the bridge.\"\n\nI'm the person people come to when they need to connect two things that don't naturally fit together. Whether it's translating English for my parents, translating code for doctors in my lab, or translating feelings into words for a friend who's struggling to express what they're going through.\n\nI think it comes from growing up between cultures. I learned early that my job was often to help people understand each other. That's carried into everything I do.\n\nIn a more practical sense, they'd also say I'm reliable. If I say I'll be somewhere or do something, I do it. That matters to me."
+  },
+  {
+    "id": "hardship.md",
+    "category": "Personal",
+    "question": "What was a hardship in life you have faced? How did you overcome it?",
+    "answer": "When I was 12, my family moved to the U.S. for my father's job. Shortly after we arrived, the company couldn't pay him what they'd promised. I could hear my parents fighting about money downstairs at night.\n\nAt my school, you had to pay for lunch with a check. I was afraid that asking for one would make things worse for my family. So I just didn't. I skipped lunch every day for about a year. I watched my friends eat chips and told myself it was fine.\n\nThe hardest part wasn't being hungry. It was deciding to finally say something. I thought staying quiet was protecting my parents. But when I finally told them, they had emergency funds. They felt terrible I'd gone hungry. My silence hadn't protected anyone. It just made things worse.\n\nThat's what I overcame: the belief that asking for help is a burden. At 12, speaking up felt like the scariest thing I could do. But it was the only thing that actually changed anything.\n\nI carry that with me now. Shadowing in urology, I watched a physician ask the same question three different ways before a patient finally admitted he'd been drinking soda constantly. The patient wasn't going to volunteer that. He didn't want to be judged or be a problem. I recognized that instinct. And I want to be the kind of physician who notices when someone's holding back and makes it safe for them to speak up."
+  },
+  {
+    "id": "healthcare_challenge.md",
+    "category": "Healthcare",
+    "question": "What's a challenge facing healthcare today?",
+    "answer": "Access, but not in the way people usually talk about it.\n\nWe often focus on whether someone has insurance or whether there's a clinic nearby. Those matter. But I think the bigger issue is invisible barriers. Patients who technically have access but can't actually get care because they don't understand the system, don't trust it, or face cultural gaps that no one addresses.\n\nI experienced this myself. When my family immigrated, I went without school lunch for a year. Not because we couldn't afford it, but because my parents didn't understand the prepaid system and I was too ashamed to explain. The resources existed. The barrier was invisible.\n\nI see this in healthcare constantly. Patients who miss appointments because they can't navigate scheduling systems. Families who refuse treatment because of cultural beliefs that no one took time to understand. The medicine exists, but something is blocking it.\n\nAs a physician, I want to be someone who looks for those hidden barriers, not just assumes a patient is non-compliant."
+  },
+  {
+    "id": "leadership.md",
+    "category": "Leadership",
+    "question": "Tell me about a time you showed leadership.",
+    "answer": "I define leadership as stepping up when standard systems fail the people who are most vulnerable.\n\nDuring my senior year, I founded a club to teach data science to underserved high school students in Georgia. When COVID hit, the libraries closed. The obvious solution was to move everything to Zoom. But I knew many of our students relied on library computers. They didn't have laptops or high-speed internet at home. Moving to Zoom would have abandoned the exact students we were trying to help.\n\nSo I rebuilt our infrastructure. I secured Google Cloud credits so students could code on any browser without needing powerful hardware. We moved communication to Discord, which uses less bandwidth than Zoom. It took extra work to set up, but we retained over 30 students who otherwise would have been locked out.\n\nTo me, leadership is anticipating who is going to be left behind by a decision and building the bridge to keep them included."
+  },
+  {
+    "id": "mistake.md",
+    "category": "Personal",
+    "question": "What was a mistake you made, and what have you done to improve on it?",
+    "answer": "During my time as an EMT at Grady, we were transporting a psychiatric patient. The address we had was outdated. When I approached the house, a man came out with a shotgun on his back, yelling at us to leave.\n\nI froze. Completely. My training disappeared. I just stood there. My partner handled it. He stayed calm, explained the misunderstanding, and we left without incident. But I couldn't sleep that night. I kept replaying it, knowing I had failed my team.\n\nI decided I couldn't let that happen again. I enrolled in Crisis Prevention Institute training and did weekly simulations with actors playing hostile individuals. I practiced until de-escalation felt automatic, not theoretical.\n\nA few months later, I was in our trauma bay when a patient's intoxicated brother started threatening staff. This time I didn't freeze. I stayed calm, lowered my voice, acknowledged his fear about his brother. He calmed down and accepted our help.\n\nWhat I learned is that there's a gap between knowing something and being able to do it under pressure. The only way to close that gap is practice. Now when I recognize I'm not prepared for something, I don't pretend. I get the training I need."
+  },
+  {
+    "id": "questions_for_them.md",
+    "category": "Personal",
+    "question": "What questions do you have for us?\n\n## Questions to Ask (Pick 2-3)\n\n### Question 1: Academic Colleges\n\"I know UTSW has the Academic Colleges system for student mentorship. How has that system shaped the culture of the student body? Do students often keep those mentor relationships into their clinical years?\"\n\n### Question 2: Parkland Integration\n\"Coming from an EMT background, I really value the safety-net mission. Can you talk about how medical students are integrated into the care teams at Parkland Hospital specifically? How much autonomy are students given there compared to the university hospital?\"\n\n### Question 3: Technology and Bedside Manner\n\"I'm very interested in how technology integrates with patient care. How does UTSW teach students to balance the increasing use of technology, like AI or Epic, with the need to maintain human connection with the patient?\"\n\n---\n\n*Note: Have all three ready. Ask 2 based on the flow of conversation. Listen to their answers and respond naturally.*",
+    "answer": ""
+  },
+  {
+    "id": "specialty.md",
+    "category": "Personal",
+    "question": "What specialty are you interested in?",
+    "answer": "I'm strongly drawn to Neurology, specifically stroke and early detection.\n\nThis comes directly from my time as an EMT. I transported so many patients who missed the golden window for stroke intervention because they didn't recognize the early signs. A subtle change in gait. Slurred speech they dismissed. By the time they called 911, it was often too late for the most effective treatments.\n\nI've spent the last few years researching how to use technology to catch these signs earlier. But I want to be an M.D. because I love the longitudinal relationship. I don't just want to read the scan. I want to be the neurologist who helps the patient navigate life after the diagnosis.\n\nI'm open to other fields like Internal Medicine as I go through rotations. But right now, I'm most passionate about the intersection of neurological care and preventative access."
+  },
+  {
+    "id": "strength.md",
+    "category": "Personal",
+    "question": "What is your greatest strength?",
+    "answer": "My greatest strength is recognizing barriers that aren't obvious on the surface, especially cultural ones.\n\nAs an EMT, I responded to a call for a young man experiencing psychosis. His father refused transport. On paper, that's \"non-compliant family.\" But I spent a few minutes listening, and I realized this was a protective father who believed his son's condition was spiritual, not medical. He wasn't refusing care. He was navigating a gap between his beliefs and our system.\n\nInstead of pushing harder or leaving, I asked if they had a religious leader they trusted. We connected with their Imam, who helped bridge that trust. The son got care.\n\nI think this matters in medicine. When a patient doesn't follow a treatment plan or refuses help, there's usually something underneath. A fear, a belief, a barrier they're not saying out loud. My instinct is to look for that, not label them difficult."
+  },
+  {
+    "id": "stress.md",
+    "category": "Personal",
+    "question": "How do you handle stress?",
+    "answer": "I manage stress through structure and physical activity.\n\nI'm a runner. I ran the Disney marathon last month. Training for that taught me how to pace myself and stay disciplined when things get hard. When I'm stressed, a long run helps me reset.\n\nI'm also a technique nerd when it comes to swimming. Focusing on the mechanics of my stroke helps me turn off my brain for a while. It's meditative.\n\nBeyond that, I rely on my support network. My sister is a physician, and we have weekly calls to decompress. She's been through medical school, residency, all of it. Having someone who understands the path and can give honest perspective makes a big difference."
+  },
+  {
+    "id": "teamwork.md",
+    "category": "Teamwork",
+    "question": "Tell me about a time you worked on a team.",
+    "answer": "I'm currently working in a lab at UTSW developing AI tools to grade medical student clinical exams. I worked closely with Ameer, a software engineer.\n\nWe hit a conflict. I noticed the AI was missing human elements of the physical exam, like empathy and bedside manner. But Ameer was focused on the grant deliverables and technical efficiency. He worried that adding new features would break the timeline.\n\nI realized we were speaking different languages. He spoke in deliverables. I spoke in clinical value. Instead of pushing my view, I sketched out a modular solution where we could add my features as optional plug-ins without touching his core code. It respected his technical boundaries while meeting the educational needs I saw.\n\nIt turned a conflict into a collaboration. We presented the tool at a conference. But the real lesson was that successful teamwork isn't about compromising standards. It's about finding a solution that honors both perspectives."
+  },
+  {
+    "id": "tell_me_about_yourself.md",
+    "category": "Personal",
+    "question": "Tell me about yourself.",
+    "answer": "I grew up in Korea with a sister who shaped how I pay attention to people. She'd never pick what she wanted — at a bakery, she'd wait for me to choose first. Once I noticed that, I started watching what she was looking at and picking that instead. Small thing, but it taught me early that caring for someone means observing closely, not just asking.\n\nThat instinct pulled me into hospital volunteering in middle school, and I've been in patient-facing roles for over ten years since. I got my EMT license and worked Grady EMS — 911 calls, specialty transport. One call that stuck with me: an elderly woman, alert, talking, nothing obviously wrong. But something about the way she moved her left leg seemed off. I flagged it to my paramedic partner. Turned out she was having a stroke. It reminded me how much those small observations matter — and made me want to be part of what comes next: the diagnosis, the treatment decisions, the recovery.\n\nThat's why I'm pursuing medicine. I want the training to take responsibility for the full arc of someone's care."
+  },
+  {
+    "id": "ten_years.md",
+    "category": "Personal",
+    "question": "Where do you see yourself in 10 years?",
+    "answer": "In 10 years, I see myself as an academic physician, likely at a teaching hospital similar to Parkland or UTSW.\n\nI want to split my time between three things.\n\nFirst, clinical practice. I want to serve a diverse urban population where I can use my background to help patients navigate complex systems.\n\nSecond, medical education. My work with the data science teaching club and the OSCE project showed me how much I love teaching and mentoring the next generation.\n\nThird, translational research. I want to take the kind of tools I'm researching now, using technology to diagnose patients earlier, and apply them at the bedside to improve actual patient outcomes.\n\nThat combination of patient care, teaching, and research is what draws me to academic medicine."
+  },
+  {
+    "id": "weakness.md",
+    "category": "Personal",
+    "question": "What is your greatest weakness?",
+    "answer": "My weakness is a tendency to take on too much alone. I default to thinking I need to handle things myself to make sure they're done right.\n\nA clear example was when a close friend in Pittsburgh was in a mental health crisis. I flew out to be with him. For about 30 hours straight, I tried to manage his safety entirely on my own. I refused help because I thought I was the only one who really understood what he needed.\n\nBy the second day, I was exhausted. My judgment was clouding. I was actually becoming less effective at helping him.\n\nWhen his sister arrived, I finally let her take over for a few hours. We created a shift system. The support he got after that was much better than what I was providing alone while running on empty.\n\nIt taught me that the \"hero mindset\" is dangerous, especially in medicine. I've been working on this actively. In my current lab, I delegate tasks to undergraduates instead of doing everything myself. On EMS shifts, I trust my partner with handoffs instead of hovering. I've learned that trusting the team provides better care than trying to endure alone."
+  },
+  {
+    "id": "why_doctor.md",
+    "category": "Personal",
+    "question": "Why do you want to become a doctor?",
+    "answer": "It goes back to that stroke patient. After we handed her off, I kept wondering what happened. What was the diagnosis? Did she recover? That feeling repeated itself shift after shift. I realized I didn't want to just transport. I wanted to be part of what came next.\n\nShadowing helped me understand what that actually looks like. With Dr. K in urology, I watched him ask a patient the same question three different ways until he got the real answer, the thing the patient wasn't going to volunteer. That stuck with me. In pediatrics, Dr. Vanhorn opened a conversation with a shy kid by asking \"How bored are you on a scale of 1-10?\" Suddenly the kid was talking. That's the kind of clinical thinking and communication I want to learn.\n\nBut what draws me most is continuity. Dr. Rhee has followed one patient for over ten years. That's what I want. The training to figure out what's wrong. The responsibility to make decisions. And the chance to be part of someone's care not for one ambulance ride, but for years."
+  },
+  {
+    "id": "why_utsw.md",
+    "category": "Personal",
+    "question": "Why do you want to come to UTSW?",
+    "answer": "I've been working at UTSW, so I've seen the culture from the inside rather than just a visit. Two things stand out.\n\nFirst, the way people support each other. I've worked in Dr. Jamieson's lab and interacted with more than ten physicians and several deans. What I noticed is that people here help each other succeed. Not just professionally, but personally. I saw a faculty member step in to support a colleague through something outside of work, completely beyond their professional obligation. It wasn't their field, wasn't their job. They just helped. I haven't seen that kind of culture elsewhere. It felt like family.\n\nSecond, the research. I'm working with Dr. Rozen on the Smile project in plastic surgery. Patients with facial nerve injuries often need surgery to restore movement, but measuring outcomes is hard. Did the patient smile because they felt an emotion, or because they forced it? Our research uses AI to tell the difference and precisely measure facial movement. That helps surgeons know which techniques actually work. What excites me about this is the broader impact. As a physician, I can help the patients I see. Through research, I can help patients I'll never meet.\n\nUTSW has both: a collaborative culture where people invest in each other, and research that extends beyond the clinic. That's where I want to train."
+  }
+]
