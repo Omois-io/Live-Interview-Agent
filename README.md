@@ -1,20 +1,60 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Live Interview Agent
 
-# Run and deploy your AI Studio app
+Real-time AI-powered interview coaching for medical school applicants. Uses Gemini 2.5 Flash with native audio/video to provide instant answer suggestions during MMI and traditional interviews.
 
-This contains everything you need to run your app locally.
+## Features
 
-View your app in AI Studio: https://ai.studio/apps/drive/1MPkXNmyTGZPKRIwUnaF8JaOIMq_q50h4
+- **Real-time Audio Processing** - Captures interviewer questions via system audio and microphone
+- **Video Support** - Reads questions displayed on screen (MMI-style interviews)
+- **Q&A Cheat Sheet** - Pre-loaded answers matched via semantic search
+- **RAG System** - Retrieves relevant context from your CV and 15 AMCAS activities
+- **LLM Activity Parsing** - Automatically structures your activities for better retrieval
+- **Live Answer Generation** - Generates personalized answers for unexpected questions
 
-## Run Locally
-
-**Prerequisites:**  Node.js
-
+## Setup
 
 1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+   ```bash
+   npm install
+   ```
+
+2. Create `.env` file with your Gemini API key:
+   ```
+   GEMINI_API_KEY=your_api_key_here
+   ```
+
+3. Run in development:
+   ```bash
+   npm run dev
+   ```
+
+4. Build for production:
+   ```bash
+   npm run build
+   ```
+
+## Usage
+
+1. **Add your API key** - Enter your Gemini API key on first launch
+2. **Set up your background** - Click "Edit CV & Activities" to add your personal statement and 15 activities
+3. **Configure Q&A** - Add/edit your prepared answers in the Questions tab
+4. **Start session** - Select audio sources and click Connect
+5. **Interview** - The agent listens and provides real-time answer suggestions
+
+## Configuration
+
+Model settings in `constants.ts`:
+- `EMBEDDING_MODEL` - Gemini embedding model for semantic search
+- `ACTIVITY_PARSER_MODEL` - Model for parsing activities into structured format
+- `MODEL_NAME` - Live audio/video model
+
+## Tech Stack
+
+- Electron + React + TypeScript
+- Gemini 2.5 Flash Native Audio API
+- Gemini Embeddings for semantic search
+- Vite + electron-vite
+
+## License
+
+MIT
