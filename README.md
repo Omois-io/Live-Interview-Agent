@@ -2,6 +2,12 @@
 
 Real-time AI-powered interview coaching for medical school applicants. Uses Gemini 2.5 Flash with native audio/video to provide instant answer suggestions during MMI and traditional interviews.
 
+## Download
+
+**[Download for Windows](https://github.com/Omois-io/Live-Interview-Agent/releases/latest)** | **[Download for Mac](https://github.com/Omois-io/Live-Interview-Agent/releases/latest)**
+
+Get your Gemini API key at [ai.google.dev](https://ai.google.dev/)
+
 ## Features
 
 - **Real-time Audio Processing** - Captures interviewer questions via system audio and microphone
