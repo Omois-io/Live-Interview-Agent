@@ -1,7 +1,9 @@
 {
-  "name": "genesearcher",
+  "name": "live-interview-agent",
   "private": true,
   "version": "1.0.0",
+  "description": "Real-time AI interview coaching for medical school applicants",
+  "author": "Omois",
   "type": "module",
   "main": "out/main/index.js",
   "scripts": {
@@ -10,11 +12,12 @@
     "preview": "electron-vite preview",
     "dev:web": "vite",
     "build:web": "vite build",
-    "dist:win": "electron-vite build && electron-builder --win --dir"
+    "dist:win": "electron-vite build && electron-builder --win --dir",
+    "dist:mac": "electron-vite build && electron-builder --mac --dir"
   },
   "build": {
-    "appId": "com.genesearcher.app",
-    "productName": "Genesearcher",
+    "appId": "com.omois.live-interview-agent",
+    "productName": "Live Interview Agent",
     "directories": {
       "output": "release"
     },
@@ -23,7 +26,10 @@
       "dist/**/*"
     ],
     "win": {
-      "target": "portable"
+      "target": "dir"
+    },
+    "mac": {
+      "target": "dir"
     }
   },
   "dependencies": {
