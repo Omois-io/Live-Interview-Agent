@@ -1,0 +1,19 @@
+/* Custom styles for Interview HUD */
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+/* Draggable header region for Electron */
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}

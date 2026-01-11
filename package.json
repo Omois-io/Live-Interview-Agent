@@ -1,0 +1,43 @@
+{
+  "name": "genesearcher",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "dev:web": "vite",
+    "build:web": "vite build",
+    "dist:win": "electron-vite build && electron-builder --win --dir"
+  },
+  "build": {
+    "appId": "com.genesearcher.app",
+    "productName": "Genesearcher",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "dist/**/*"
+    ],
+    "win": {
+      "target": "portable"
+    }
+  },
+  "dependencies": {
+    "@google/genai": "^1.34.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "electron": "^33.2.0",
+    "electron-builder": "^26.4.0",
+    "electron-vite": "^3.0.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0"
+  }
+}
