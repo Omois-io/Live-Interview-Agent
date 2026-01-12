@@ -13,6 +13,7 @@ import { LiveAnswerPanel } from './components/LiveAnswerPanel';
 import { TabbedSidebar } from './components/TabbedSidebar';
 import { ParsedActivity } from './services/activityParserService';
 import { DEFAULT_SYSTEM_PROMPT, formatCheatSheet, renderPrompt } from './services/promptUtils';
+import { logger } from './services/logger';
 
 // Pricing Constants for Gemini 2.5 Flash Native Audio (Live API)
 // Model: gemini-2.5-flash-native-audio-preview-12-2025
@@ -98,6 +99,7 @@ export default function App() {
   const [tokenStats, setTokenStats] = useState<TokenStats>({ inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCost: 0 });
   const [showSummary, setShowSummary] = useState(false);
   const [lastSessionStats, setLastSessionStats] = useState<TokenStats | null>(null);
+  const [lastError, setLastError] = useState<string | null>(null);
 
   const [showAudioGuide, setShowAudioGuide] = useState(false);
   const [showContextModal, setShowContextModal] = useState(false);
@@ -139,6 +141,9 @@ export default function App() {
   const [isScanning, setIsScanning] = useState(false);
   const [lastScanResult, setLastScanResult] = useState<string | null>(null);
 
+  // Track if user manually selected an audio source (don't auto-change it)
+  const userSelectedSourceRef = useRef<boolean>(false);
+
   // Initial Key Check
   useEffect(() => {
     const checkKey = async () => {
@@ -177,10 +182,10 @@ export default function App() {
       if (cacheLoaded) {
         // Embeddings loaded from cache!
         setParsedActivities(embeddingServiceRef.current.getParsedActivities());
-        console.log('Embeddings loaded from cache');
+        logger.info('Embeddings loaded from cache');
       } else {
         // No cache or documents changed - need to compute embeddings
-        console.log('Cache miss - embeddings need to be computed on session start');
+        logger.info('Cache miss - embeddings need to be computed on session start');
       }
     };
 
@@ -213,25 +218,38 @@ export default function App() {
     if (!isElectron || !window.electronAPI) return;
 
     const sources = await window.electronAPI.getAudioSources();
-    console.log('Audio sources:', sources);
+    logger.info(`Audio sources refreshed: ${sources.length} sources found`);
+    sources.forEach(s => logger.info(`  - ${s.name} (${s.id})`));
     setSystemAudioSources(sources);
+
+    // Don't auto-select if user has manually chosen a source
+    if (userSelectedSourceRef.current) {
+      logger.info(`User has manually selected source, skipping auto-select`);
+      // Verify the selected source still exists
+      const stillExists = sources.some(s => s.id === selectedSystemSource);
+      if (!stillExists && sources.length > 0) {
+        logger.warn(`Previously selected source no longer available, keeping selection`);
+      }
+      return;
+    }
 
     // Only auto-select on first load or if no source selected
     if (autoSelect || !selectedSystemSource) {
       const platform = window.electronAPI?.platform;
       if (platform === 'win32') {
-        // Don't auto-select "Entire screen" - let user choose
-        // Prefer window sources over screen capture
-        const window = sources.find(s => !s.name.toLowerCase().includes('entire screen') && !s.name.toLowerCase().includes('screen'));
-        if (window) {
-          setSelectedSystemSource(window.id);
+        // Auto-select "Entire Screen" as default for reliability
+        const entireScreen = sources.find(s => s.name.toLowerCase().includes('entire screen'));
+        if (entireScreen) {
+          logger.info(`Auto-selecting: ${entireScreen.name}`);
+          setSelectedSystemSource(entireScreen.id);
         } else if (sources.length > 0) {
-          // Fallback to first source if no window found
+          logger.info(`Auto-selecting first source: ${sources[0].name}`);
           setSelectedSystemSource(sources[0].id);
         }
       } else {
         const monitor = sources.find(s => s.type === 'monitor');
         if (monitor) {
+          logger.info(`Auto-selecting monitor: ${monitor.name}`);
           setSelectedSystemSource(monitor.id);
         }
       }
@@ -254,6 +272,23 @@ export default function App() {
 
     return () => clearInterval(interval);
   }, [connectionState, refreshAudioSources]);
+
+  // Connection timeout safety
+  useEffect(() => {
+    let timeoutId: NodeJS.Timeout;
+
+    if (connectionState === ConnectionState.CONNECTING || connectionState === ConnectionState.RECONNECTING) {
+      timeoutId = setTimeout(() => {
+        console.error('Connection timed out');
+        alert('Connection timed out. Please check your internet connection and API key.');
+        handleDisconnect();
+      }, 15000); // 15 seconds timeout
+    }
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [connectionState, handleDisconnect]);
 
   // Note: Transparency only affects background elements (header, sidebar)
   // The answer panel stays fully opaque for readability
@@ -324,19 +359,20 @@ export default function App() {
             audio: selectedMicId ? { deviceId: { exact: selectedMicId } } : true
           });
         } catch (err) {
-          console.warn("Could not access microphone", err);
+          logger.warn("Could not access microphone", err);
         }
       }
 
       // Electron: Start system audio capture
       if (isElectron && window.electronAPI && audioMode !== 'mic' && selectedSystemSource) {
         const platform = window.electronAPI.platform;
+        logger.info(`Starting system audio capture on ${platform}, source: ${selectedSystemSource}`);
 
         if (platform === 'win32') {
           // Windows: Must capture video to get audio (they're tied together in desktop capture)
           // We capture both but only send audio to Gemini
           try {
-            console.log('Attempting Windows system audio capture with source:', selectedSystemSource);
+            logger.info('Attempting Windows system audio capture with source:', selectedSystemSource);
             const fullStream = await (navigator.mediaDevices as any).getUserMedia({
               audio: {
                 mandatory: {
@@ -356,20 +392,23 @@ export default function App() {
 
             const audioTracks = fullStream.getAudioTracks();
             const videoTracks = fullStream.getVideoTracks();
+            logger.info(`Captured tracks - Audio: ${audioTracks.length}, Video: ${videoTracks.length}`);
 
             // Stop video tracks immediately - we don't need them
             videoTracks.forEach(track => track.stop());
 
             if (audioTracks.length > 0) {
               systemStream = new MediaStream(audioTracks);
-              console.log('Windows system audio capture started, audio tracks:', audioTracks.length);
+              logger.info('Windows system audio capture started successfully');
             } else {
-              console.error('No audio tracks captured!');
+              logger.error('No audio tracks captured from source!');
               alert('No audio was captured from this source. Please:\n\n1. START PLAYING AUDIO first (YouTube, music, etc.)\n2. Then click Start while audio is playing\n3. Try selecting a different source\n4. For best results, use "Entire Screen"');
               return; // Don't continue with connection
             }
-          } catch (err) {
-            console.error('Failed to capture Windows system audio:', err);
+          } catch (err: any) {
+            logger.error('Failed to capture Windows system audio:', err);
+            logger.error('Error name:', err?.name);
+            logger.error('Error message:', err?.message);
             alert('Failed to capture system audio. Please:\n\n1. Select a different source from the dropdown\n2. Make sure audio is ACTIVELY PLAYING\n3. Try selecting "Entire Screen" (works most reliably)\n4. Check Windows privacy settings allow screen recording');
             return; // Don't continue with connection
           }
@@ -381,24 +420,26 @@ export default function App() {
 
       // Validate we have at least one audio stream before connecting
       if (!micStream && !systemStream) {
-        console.error('No valid audio streams available');
+        logger.error('No valid audio streams available - cannot start session');
         alert('No audio stream available. Please check your audio source selection and try again.');
         return;
       }
 
+      logger.info(`Starting Gemini session with streams - Mic: ${!!micStream}, System: ${!!systemStream}`);
       streamsRef.current = { mic: micStream, system: systemStream };
       setMediaStream(micStream || systemStream || null);
 
       startGeminiSession(streamsRef.current);
 
     } catch (err: any) {
-      console.error("Error starting session:", err);
+      logger.error("Error starting session:", err);
       alert(err.message || "Failed to start session.");
     }
   };
 
   const startMicCaptureOnly = async () => {
     try {
+      logger.info('Starting mic-only capture');
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: selectedMicId ? { deviceId: { exact: selectedMicId } } : true
       });
@@ -406,7 +447,7 @@ export default function App() {
       setMediaStream(stream);
       startGeminiSession(streamsRef.current, true);
     } catch (err: any) {
-      console.error("Error accessing mic:", err);
+      logger.error("Error accessing mic:", err);
       alert("Failed to access microphone. Please check permissions.");
     }
   };
@@ -451,24 +492,25 @@ export default function App() {
       // No embeddings loaded - need to compute them
       try {
         setIsEmbedding(true);
-        console.log('Computing embeddings for the first time...');
+        logger.info('Computing embeddings for the first time...');
         await embeddingServiceRef.current.initializeAllEmbeddings(questions, company || undefined);
         // Update parsed activities state after initialization
         if (embeddingServiceRef.current) {
           setParsedActivities(embeddingServiceRef.current.getParsedActivities());
         }
-        console.log('Embeddings initialized and saved to cache');
+        logger.info('Embeddings initialized and saved to cache');
       } catch (err) {
-        console.warn('Failed to initialize embeddings:', err);
+        logger.warn('Failed to initialize embeddings:', err);
         // Continue anyway - embeddings are optional
       } finally {
         setIsEmbedding(false);
       }
     } else {
-      console.log(`Using cached embeddings: ${stats.qa} Q&A, ${stats.chunks} chunks`);
+      logger.info(`Using cached embeddings: ${stats.qa} Q&A, ${stats.chunks} chunks`);
     }
 
-    console.log("Using System Prompt:", systemInstruction);
+    logger.info(`Starting Gemini connection with model: ${selectedModel}`);
+    logger.info("System Prompt length:", systemInstruction.length);
 
     const streamsToConnect = { ...streams };
     if (!forceMicOnly) {
@@ -604,6 +646,7 @@ export default function App() {
       },
       onError: (e) => {
         console.error('Gemini connection error:', e);
+        setLastError(e.message || "Unknown error");
         // Don't clear suggestions - keep previous answers visible
         // Attempt auto-reconnect after 2 seconds
         setConnectionState(ConnectionState.RECONNECTING);
@@ -617,16 +660,18 @@ export default function App() {
           }
         }, 2000);
       },
+
       onClose: () => {
-        console.log('Gemini session closed');
+        logger.info('Gemini session closed by server');
         // Don't clear suggestions - keep previous answers visible
         // Attempt auto-reconnect after 2 seconds
         setConnectionState(ConnectionState.RECONNECTING);
         setTimeout(() => {
           if (streamsRef.current.mic || streamsRef.current.system) {
-            console.log('Auto-reconnecting after session close...');
+            logger.info('Auto-reconnecting after session close...');
             startGeminiSession(streamsRef.current, false, true);
           } else {
+            logger.warn('Cannot reconnect - no audio streams, disconnecting');
             handleDisconnect();
           }
         }, 2000);
@@ -650,12 +695,12 @@ export default function App() {
       embeddingServiceRef.current.clearCache();
 
       // Re-initialize
-      console.log('Refreshing embeddings...');
+      logger.info('Refreshing embeddings...');
       await embeddingServiceRef.current.initializeAllEmbeddings(questions, company || undefined);
       setParsedActivities(embeddingServiceRef.current.getParsedActivities());
-      console.log('Embeddings refreshed successfully');
+      logger.info('Embeddings refreshed successfully');
     } catch (err) {
-      console.error('Failed to refresh embeddings:', err);
+      logger.error('Failed to refresh embeddings:', err);
       alert('Failed to refresh embeddings. Check console for details.');
     } finally {
       setIsEmbedding(false);
@@ -715,10 +760,11 @@ export default function App() {
   // Screen scan handler - captures screen and detects questions
   const handleScreenScan = async () => {
     if (!screenScannerRef.current || !geminiServiceRef.current) {
-      console.warn('Screen scanner or Gemini service not initialized');
+      logger.warn('Screen scanner or Gemini service not initialized');
       return;
     }
 
+    logger.info('Starting screen scan for questions...');
     setIsScanning(true);
     setLastScanResult(null);
 
@@ -727,7 +773,7 @@ export default function App() {
 
       if (result.hasQuestion && result.question) {
         setLastScanResult(result.question);
-        console.log('Question detected from screen:', result.question);
+        logger.info('Question detected from screen:', result.question);
 
         // Inject the detected question into the live session
         await geminiServiceRef.current.injectText(
@@ -735,10 +781,10 @@ export default function App() {
         );
       } else {
         setLastScanResult('No question detected');
-        console.log('No question detected on screen');
+        logger.info('No question detected on screen');
       }
     } catch (err) {
-      console.error('Screen scan failed:', err);
+      logger.error('Screen scan failed:', err);
       setLastScanResult('Scan failed');
     } finally {
       setIsScanning(false);
@@ -1052,7 +1098,11 @@ export default function App() {
             onSelectModel={setSelectedModel}
             onSelectAudioMode={setAudioMode}
             onSelectMic={setSelectedMicId}
-            onSelectSystemSource={setSelectedSystemSource}
+            onSelectSystemSource={(id) => {
+              logger.info(`User manually selected audio source: ${id}`);
+              userSelectedSourceRef.current = true;
+              setSelectedSystemSource(id);
+            }}
             onRefreshSources={() => refreshAudioSources(false)}
             onSelectQuestion={(id) => setActiveQuestionId(id)}
             onEditQuestion={(q) => { setCurrentEdit(q); setIsEditing(true); }}
@@ -1086,7 +1136,7 @@ export default function App() {
             />
           ) : (
             /* Status indicators when not showing Live Answer Panel */
-            <div className="flex-1 flex flex-col justify-center items-center">
+            <div className="flex-1 flex flex-col justify-center items-center bg-gray-900/20 backdrop-blur-sm m-4 rounded-3xl border border-white/5">
               {suggestions.length === 0 && connectionState === ConnectionState.CONNECTED && (
                 <div className="flex flex-col items-center justify-center text-white/20 select-none pointer-events-none">
                   <div className="text-4xl font-black tracking-tighter uppercase mb-2">Listening...</div>
@@ -1105,15 +1155,20 @@ export default function App() {
                 </div>
               )}
               {connectionState === ConnectionState.RECONNECTING && (
-                <div className="flex flex-col items-center justify-center text-yellow-500/60 select-none pointer-events-none animate-pulse">
+                <div className="flex flex-col items-center justify-center text-yellow-500/60 select-none pointer-events-none animate-pulse text-center p-4">
                   <div className="text-3xl font-black tracking-tighter uppercase mb-2">Reconnecting...</div>
-                  <div className="text-sm tracking-widest text-yellow-500/40">Session will resume shortly</div>
+                  <div className="text-sm tracking-widest text-yellow-500/40 mb-2">Session will resume shortly</div>
+                  {lastError && (
+                    <div className="text-xs text-red-400 font-mono mt-2 max-w-xs break-words bg-black/20 p-2 rounded border border-red-500/20">
+                      Error: {lastError}
+                    </div>
+                  )}
                 </div>
               )}
               {connectionState === ConnectionState.CONNECTING && suggestions.length === 0 && (
-                <div className="flex flex-col items-center justify-center text-blue-500/40 select-none pointer-events-none">
+                <div className="flex flex-col items-center justify-center text-blue-400 select-none pointer-events-none animate-pulse">
                   <div className="text-3xl font-black tracking-tighter uppercase mb-2">Connecting...</div>
-                  <div className="text-sm tracking-widest text-blue-500/20">Please wait</div>
+                  <div className="text-sm tracking-widest text-blue-500/60">Please wait</div>
                 </div>
               )}
             </div>

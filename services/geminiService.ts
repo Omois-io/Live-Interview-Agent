@@ -376,7 +376,12 @@ export class GeminiLiveService {
       sampleRate: 16000,
     });
 
-    logger.info(`AudioContext created, sample rate: ${this.audioContext.sampleRate}`);
+    // Ensure context is running (sometimes starts suspended)
+    if (this.audioContext.state === 'suspended') {
+      this.audioContext.resume();
+    }
+
+    logger.info(`AudioContext created, state: ${this.audioContext.state}, sample rate: ${this.audioContext.sampleRate}`);
 
     // Create mixer
     const mixer = this.audioContext.createGain();

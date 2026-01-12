@@ -1,5 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+// Simple preload logger (logs to DevTools console)
+const preloadLog = (action: string, ...args: any[]) => {
+  console.log(`[Preload] ${action}`, ...args);
+};
+
 // Type definitions for the exposed API
 export interface AudioSource {
   id: string;
@@ -57,16 +62,31 @@ export interface ElectronAPI {
 // Expose protected methods to renderer
 contextBridge.exposeInMainWorld('electronAPI', {
   // Audio capture
-  getAudioSources: () => ipcRenderer.invoke('get-audio-sources'),
-  startSystemAudio: (sourceId: string) => ipcRenderer.invoke('start-system-audio', sourceId),
-  stopSystemAudio: () => ipcRenderer.invoke('stop-system-audio'),
+  getAudioSources: () => {
+    preloadLog('getAudioSources called');
+    return ipcRenderer.invoke('get-audio-sources');
+  },
+  startSystemAudio: (sourceId: string) => {
+    preloadLog('startSystemAudio called', { sourceId });
+    return ipcRenderer.invoke('start-system-audio', sourceId);
+  },
+  stopSystemAudio: () => {
+    preloadLog('stopSystemAudio called');
+    return ipcRenderer.invoke('stop-system-audio');
+  },
   onSystemAudioData: (callback: (data: Buffer) => void) => {
+    preloadLog('onSystemAudioData listener registered');
     ipcRenderer.on('system-audio-data', (_event, data) => callback(data));
   },
   onAudioCaptureError: (callback: (error: string) => void) => {
-    ipcRenderer.on('audio-capture-error', (_event, error) => callback(error));
+    preloadLog('onAudioCaptureError listener registered');
+    ipcRenderer.on('audio-capture-error', (_event, error) => {
+      preloadLog('Audio capture error received', error);
+      callback(error);
+    });
   },
   removeSystemAudioListener: () => {
+    preloadLog('removeSystemAudioListener called');
     ipcRenderer.removeAllListeners('system-audio-data');
     ipcRenderer.removeAllListeners('audio-capture-error');
   },
@@ -79,11 +99,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   exportRecording: (filename: string) => ipcRenderer.invoke('export-recording', filename),
 
   // API key
-  getApiKey: () => ipcRenderer.invoke('get-api-key'),
-  setApiKey: (apiKey: string) => ipcRenderer.invoke('set-api-key', apiKey),
+  getApiKey: () => {
+    preloadLog('getApiKey called');
+    return ipcRenderer.invoke('get-api-key');
+  },
+  setApiKey: (apiKey: string) => {
+    preloadLog('setApiKey called', { keyLength: apiKey?.length || 0 });
+    return ipcRenderer.invoke('set-api-key', apiKey);
+  },
 
   // Window control
-  setAlwaysOnTop: (value: boolean) => ipcRenderer.invoke('set-always-on-top', value),
+  setAlwaysOnTop: (value: boolean) => {
+    preloadLog('setAlwaysOnTop', { value });
+    return ipcRenderer.invoke('set-always-on-top', value);
+  },
   setWindowOpacity: (opacity: number) => ipcRenderer.invoke('set-window-opacity', opacity),
   setClickThrough: (enable: boolean) => ipcRenderer.invoke('set-click-through', enable),
 
