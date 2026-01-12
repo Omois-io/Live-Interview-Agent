@@ -1,6 +1,7 @@
 import { GoogleGenAI, Modality, Type, FunctionDeclaration, LiveServerMessage } from "@google/genai";
 import { InterviewQA } from "../types";
-import { createBlob, createImageBlob } from "./audioUtils";
+import { createBlob } from "./audioUtils";
+import { logger } from "./logger";
 
 interface LiveConnectionCallbacks {
   onOpen: () => void;
@@ -8,7 +9,14 @@ interface LiveConnectionCallbacks {
   onAiAnswer: (answer: string, question: string) => void;
   onTranscriptUpdate: (text: string) => void;
   onTranscriptCommit: (text: string, speaker: 'interviewer' | 'you') => void;
-  onTokenUpdate: (input: number, output: number) => void;
+  onTokenUpdate: (tokenData: {
+    textInput: number;
+    audioVideoInput: number;
+    textOutput: number;
+    audioOutput: number;
+    totalInput: number;
+    totalOutput: number;
+  }) => void;
   onError: (e: Error) => void;
   onClose: () => void;
   // Streaming text callbacks
@@ -24,14 +32,6 @@ export interface ElectronAudioConfig {
   systemAudioSource: string; // PulseAudio source ID
 }
 
-// Video capture configuration
-export interface VideoConfig {
-  enabled: boolean;
-  frameRate?: number; // Frames per second (default: 1)
-  quality?: number;   // JPEG quality 0-1 (default: 0.7)
-  maxWidth?: number;  // Max frame width (default: 1280)
-  maxHeight?: number; // Max frame height (default: 720)
-}
 
 export class GeminiLiveService {
   private ai: GoogleGenAI;
@@ -57,18 +57,22 @@ export class GeminiLiveService {
   private totalInputTokens = 0;
   private totalOutputTokens = 0;
 
+  // Track modality-specific tokens (for accurate pricing)
+  private textInputTokens = 0;
+  private audioVideoInputTokens = 0;
+  private textOutputTokens = 0;
+  private audioOutputTokens = 0;
+
+  // Track audio/video duration for fallback estimation
+  private audioInputDuration = 0;  // seconds
+  private videoInputDuration = 0;  // seconds
+  private sessionStartTime = 0;    // timestamp
+
   // Electron mode: IPC audio handling
   private electronMode: boolean = false;
   private systemAudioBuffer: Float32Array[] = [];
   private systemAudioGain: GainNode | null = null;
 
-  // Video capture
-  private videoStream: MediaStream | null = null;
-  private videoCanvas: HTMLCanvasElement | null = null;
-  private videoContext: CanvasRenderingContext2D | null = null;
-  private videoElement: HTMLVideoElement | null = null;
-  private videoFrameInterval: ReturnType<typeof setInterval> | null = null;
-  private videoConfig: VideoConfig = { enabled: false };
 
   // RAG callback
   private onRetrieveContext: ((question: string) => Promise<string>) | null = null;
@@ -78,12 +82,11 @@ export class GeminiLiveService {
   }
 
   public async connect(
-    streams: { system?: MediaStream; mic?: MediaStream; video?: MediaStream },
+    streams: { system?: MediaStream; mic?: MediaStream },
     modelId: string,
     systemInstruction: string,
     callbacks: LiveConnectionCallbacks,
-    electronConfig?: ElectronAudioConfig,
-    videoConfig?: VideoConfig
+    electronConfig?: ElectronAudioConfig
   ) {
     if (this.isConnected) return;
 
@@ -96,9 +99,6 @@ export class GeminiLiveService {
 
     // Store RAG callback
     this.onRetrieveContext = callbacks.onRetrieveContext || null;
-
-    // Store video config
-    this.videoConfig = videoConfig || { enabled: false };
 
     // Check if running in Electron mode (Linux only - Windows uses MediaStream directly)
     const isLinux = window.electronAPI?.platform === 'linux';
@@ -130,12 +130,15 @@ export class GeminiLiveService {
       },
     };
 
+    logger.info(`Attempting to connect to Gemini Live API: ${modelId}`);
+    logger.info(`Has system stream: ${!!streams.system}, Has mic stream: ${!!streams.mic}`);
+
     try {
       this.sessionPromise = this.ai.live.connect({
         model: modelId,
         config: {
           systemInstruction: systemInstruction,
-          responseModalities: [Modality.TEXT], // Changed from AUDIO to TEXT for streaming
+          responseModalities: [Modality.TEXT], // TEXT for streaming responses
           tools: [{ functionDeclarations: [selectQuestionTool, generateAnswerTool] }],
           inputAudioTranscription: {},
           speechConfig: {
@@ -146,17 +149,20 @@ export class GeminiLiveService {
         callbacks: {
           onopen: () => {
             this.isConnected = true;
+            this.sessionStartTime = Date.now();
             callbacks.onOpen();
             this.startAudioMixing(streams, electronConfig);
-            // Start video capture if enabled
-            if (this.videoConfig.enabled && streams.video) {
-              this.startVideoCapture(streams.video);
-            }
           },
           onmessage: (message: LiveServerMessage) => {
+            // Log all incoming messages for debugging
+            logger.info(`Received message from Gemini: ${JSON.stringify(message).substring(0, 500)}`);
+
             // 1. Handle Usage Metadata
             const usage = (message as any).usageMetadata || (message.serverContent as any)?.usageMetadata;
             if (usage) {
+               console.log('[Token Debug] Usage metadata received:', JSON.stringify(usage));
+
+               // Update total tokens
                if (usage.totalTokenCount) {
                   this.totalInputTokens = usage.promptTokenCount || 0;
                   this.totalOutputTokens = usage.candidatesTokenCount || 0;
@@ -166,7 +172,50 @@ export class GeminiLiveService {
                   this.totalInputTokens = input;
                   this.totalOutputTokens = output;
                }
-               callbacks.onTokenUpdate(this.totalInputTokens, this.totalOutputTokens);
+
+               // Try to extract modality-specific tokens
+               const modalityBreakdown = usage.modalities || usage.modalityBreakdown;
+
+               if (modalityBreakdown) {
+                  // API provides modality breakdown - use it directly
+                  console.log('[Token Debug] Modality breakdown found:', JSON.stringify(modalityBreakdown));
+
+                  this.textInputTokens = modalityBreakdown.TEXT?.input || 0;
+                  this.audioVideoInputTokens = (modalityBreakdown.AUDIO?.input || 0) + (modalityBreakdown.VIDEO?.input || 0);
+                  this.textOutputTokens = modalityBreakdown.TEXT?.output || 0;
+                  this.audioOutputTokens = modalityBreakdown.AUDIO?.output || 0;
+               } else {
+                  // No modality breakdown - estimate based on session duration
+                  console.log('[Token Debug] No modality breakdown - estimating from duration');
+
+                  const elapsedSeconds = this.sessionStartTime > 0
+                    ? (Date.now() - this.sessionStartTime) / 1000
+                    : 0;
+
+                  // Estimate audio tokens (assuming audio is always present)
+                  const estimatedAudioTokens = Math.floor(elapsedSeconds * 32); // 32 tokens/sec
+
+                  // Remaining tokens are text (no video)
+                  this.audioVideoInputTokens = estimatedAudioTokens;
+                  this.textInputTokens = Math.max(0, this.totalInputTokens - this.audioVideoInputTokens);
+
+                  // Assume output is mostly text (conservative estimate)
+                  this.textOutputTokens = this.totalOutputTokens;
+                  this.audioOutputTokens = 0;
+
+                  console.log(`[Token Debug] Estimated - Audio: ${estimatedAudioTokens}, Text Input: ${this.textInputTokens}`);
+               }
+
+               console.log(`[Token Debug] Tokens breakdown: TextIn=${this.textInputTokens}, A/V In=${this.audioVideoInputTokens}, TextOut=${this.textOutputTokens}, AudioOut=${this.audioOutputTokens}`);
+
+               callbacks.onTokenUpdate({
+                  textInput: this.textInputTokens,
+                  audioVideoInput: this.audioVideoInputTokens,
+                  textOutput: this.textOutputTokens,
+                  audioOutput: this.audioOutputTokens,
+                  totalInput: this.totalInputTokens,
+                  totalOutput: this.totalOutputTokens
+               });
             }
 
             // 2. Handle Tool Calls
@@ -200,10 +249,10 @@ export class GeminiLiveService {
                           }
                         });
                       }).catch(e => {
-                        console.error("Failed to send tool response:", e);
+                        logger.error("Failed to send tool response:", e);
                       });
                     }).catch(e => {
-                      console.error("Failed to retrieve context:", e);
+                      logger.error("Failed to retrieve context:", e);
                       // Send response without context on error
                       this.sessionPromise!.then(session => {
                         session.sendToolResponse({
@@ -229,7 +278,7 @@ export class GeminiLiveService {
                       }
                     });
                   }).catch(e => {
-                      console.error("Failed to send tool response:", e);
+                      logger.error("Failed to send tool response:", e);
                   });
                 }
               });
@@ -282,14 +331,25 @@ export class GeminiLiveService {
               }
             }
           },
-          onclose: () => {
-            console.log("Gemini session closed");
+          onclose: (event: any) => {
+            logger.info("Gemini session closed");
+            logger.info(`Session lasted: ${this.isConnected ? (Date.now() - this.sessionStartTime) + 'ms' : '0ms'}`);
+            logger.info(`Was connected: ${this.isConnected}`);
+            // Log close event details if available
+            if (event) {
+              logger.info(`Close event: ${JSON.stringify(event)}`);
+              logger.info(`Close code: ${event.code}, reason: ${event.reason}`);
+            }
             this.cleanup();
             callbacks.onClose();
           },
-          onerror: (e) => {
-            console.error('Gemini Live Error:', e);
-            // Catch "Deadline expired" specific string if possible, though 'e' might be generic
+          onerror: (e: any) => {
+            logger.error('Gemini Live Error:', e);
+            logger.error('Error type:', typeof e);
+            logger.error('Error details:', JSON.stringify(e, null, 2));
+            if (e.code) logger.error('Error code:', e.code);
+            if (e.reason) logger.error('Error reason:', e.reason);
+            if (e.message) logger.error('Error message:', e.message);
             this.cleanup();
             callbacks.onError(new Error(e.message || "Connection error"));
           }
@@ -299,6 +359,8 @@ export class GeminiLiveService {
       await this.sessionPromise;
 
     } catch (error) {
+      logger.error('Failed to establish Gemini Live connection:', error);
+      logger.error('Model ID:', modelId);
       this.cleanup();
       callbacks.onError(error instanceof Error ? error : new Error("Failed to connect"));
     }
@@ -308,9 +370,13 @@ export class GeminiLiveService {
     streams: { system?: MediaStream; mic?: MediaStream },
     electronConfig?: ElectronAudioConfig
   ) {
+    logger.info(`Starting audio mixing - System: ${!!streams.system}, Mic: ${!!streams.mic}, Electron mode: ${this.electronMode}`);
+
     this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
       sampleRate: 16000,
     });
+
+    logger.info(`AudioContext created, sample rate: ${this.audioContext.sampleRate}`);
 
     // Create mixer
     const mixer = this.audioContext.createGain();
@@ -348,12 +414,37 @@ export class GeminiLiveService {
     mixer.connect(this.processor);
     this.processor.connect(this.audioContext.destination);
 
+    // 4. Send initial audio packet immediately to keep connection alive
+    // The ScriptProcessor takes ~256ms to fire first callback, but Gemini expects audio sooner
+    const initialSilence = new Float32Array(4096); // Silent buffer
+    const initialBlob = createBlob(initialSilence);
+    logger.info('Sending initial audio packet to keep connection alive');
+    this.sessionPromise?.then((session) => {
+      if (this.isConnected) {
+        session.sendRealtimeInput([initialBlob]); // Use array format
+        logger.info('Initial audio packet sent successfully');
+      }
+    }).catch(err => {
+      logger.error('Failed to send initial audio packet:', err);
+    });
+
     // Reusable buffers for energy calculation
     const sysData = new Float32Array(256);
     const micData = new Float32Array(256);
 
+    // Add counter for periodic logging
+    let audioProcessCount = 0;
+    let totalBlobsSent = 0;
+
     this.processor.onaudioprocess = (e) => {
       if (!this.isConnected || !this.sessionPromise) return;
+
+      audioProcessCount++;
+
+      // Log every 100 audio frames (~6 seconds at 4096 buffer size)
+      if (audioProcessCount % 100 === 1) {
+        logger.info(`Audio processing active - Frame ${audioProcessCount}, Blobs sent: ${totalBlobsSent}`);
+      }
 
       // In Electron mode, mix IPC audio buffer with processor output
       let inputData = e.inputBuffer.getChannelData(0);
@@ -377,15 +468,28 @@ export class GeminiLiveService {
 
       // 1. Send Audio to Gemini
       const pcmBlob = createBlob(inputData);
+      totalBlobsSent++;
+
+      // Log first few blobs and periodically after
+      if (totalBlobsSent <= 5 || totalBlobsSent % 100 === 0) {
+        logger.info(`Sending audio blob #${totalBlobsSent}, size: ${pcmBlob.data.length} bytes`);
+      }
 
       this.sessionPromise.then((session) => {
         // Double check connected state before sending to avoid "Deadline exceeded" on closed pipes
         if (this.isConnected) {
-          session.sendRealtimeInput({ media: pcmBlob });
+          session.sendRealtimeInput([pcmBlob]); // Use array format
+        } else {
+          if (totalBlobsSent <= 5) {
+            logger.warn(`Attempted to send blob #${totalBlobsSent} but not connected`);
+          }
         }
       }).catch(err => {
         // Swallow send errors if we are closing, otherwise log
-        if (this.isConnected) console.warn("Error sending audio frame:", err);
+        if (this.isConnected) {
+          logger.error(`Error sending audio blob #${totalBlobsSent} to Gemini:`, err);
+          logger.error('Error details:', JSON.stringify(err, null, 2));
+        }
       });
 
       // 2. Calculate Energy for Speaker Detection
@@ -407,10 +511,10 @@ export class GeminiLiveService {
     // Start system audio capture via IPC
     window.electronAPI.startSystemAudio(sourceId).then(success => {
       if (!success) {
-        console.error('Failed to start system audio capture');
+        logger.error('Failed to start system audio capture');
         return;
       }
-      console.log('System audio capture started for source:', sourceId);
+      logger.info('System audio capture started for source:', sourceId);
     });
 
     // Create analyser for system audio energy tracking
@@ -444,7 +548,7 @@ export class GeminiLiveService {
 
     // Handle capture errors
     window.electronAPI.onAudioCaptureError((error: string) => {
-      console.error('System audio capture error:', error);
+      logger.error('System audio capture error:', error);
     });
   }
 
@@ -457,110 +561,26 @@ export class GeminiLiveService {
   }
 
   /**
-   * Start capturing video frames and sending to Gemini
+   * Inject text into the live session (e.g., a question detected from screen scan)
    */
-  private startVideoCapture(videoStream: MediaStream) {
-    this.videoStream = videoStream;
-
-    // Get config with defaults
-    const frameRate = this.videoConfig.frameRate || 1; // 1 fps default
-    const quality = this.videoConfig.quality || 0.7;
-    const maxWidth = this.videoConfig.maxWidth || 1280;
-    const maxHeight = this.videoConfig.maxHeight || 720;
-
-    // Create video element to receive stream
-    this.videoElement = document.createElement('video');
-    this.videoElement.srcObject = videoStream;
-    this.videoElement.muted = true;
-    this.videoElement.playsInline = true;
-
-    // Create canvas for frame capture
-    this.videoCanvas = document.createElement('canvas');
-    this.videoContext = this.videoCanvas.getContext('2d');
-
-    this.videoElement.onloadedmetadata = () => {
-      if (!this.videoElement || !this.videoCanvas || !this.videoContext) return;
-
-      // Calculate scaled dimensions
-      let width = this.videoElement.videoWidth;
-      let height = this.videoElement.videoHeight;
-
-      if (width > maxWidth) {
-        height = (maxWidth / width) * height;
-        width = maxWidth;
-      }
-      if (height > maxHeight) {
-        width = (maxHeight / height) * width;
-        height = maxHeight;
-      }
-
-      this.videoCanvas.width = width;
-      this.videoCanvas.height = height;
-
-      console.log(`Video capture started: ${width}x${height} @ ${frameRate}fps`);
-
-      // Start frame capture interval
-      const intervalMs = 1000 / frameRate;
-      this.videoFrameInterval = setInterval(() => {
-        this.captureAndSendFrame(quality);
-      }, intervalMs);
-    };
-
-    this.videoElement.play().catch(e => {
-      console.error('Failed to start video playback:', e);
-    });
-  }
-
-  /**
-   * Capture a single frame and send to Gemini
-   */
-  private captureAndSendFrame(quality: number) {
-    if (!this.isConnected || !this.sessionPromise) return;
-    if (!this.videoElement || !this.videoCanvas || !this.videoContext) return;
-
-    // Draw current frame to canvas
-    this.videoContext.drawImage(
-      this.videoElement,
-      0, 0,
-      this.videoCanvas.width,
-      this.videoCanvas.height
-    );
-
-    // Convert to base64 JPEG
-    const imageBlob = createImageBlob(this.videoCanvas, quality);
-
-    // Send to Gemini
-    this.sessionPromise.then(session => {
-      if (this.isConnected) {
-        session.sendRealtimeInput({ media: imageBlob });
-      }
-    }).catch(err => {
-      if (this.isConnected) console.warn("Error sending video frame:", err);
-    });
-  }
-
-  /**
-   * Stop video capture
-   */
-  private stopVideoCapture() {
-    if (this.videoFrameInterval) {
-      clearInterval(this.videoFrameInterval);
-      this.videoFrameInterval = null;
+  public async injectText(text: string): Promise<void> {
+    if (!this.isConnected || !this.sessionPromise) {
+      logger.warn('Cannot inject text - not connected');
+      return;
     }
 
-    if (this.videoElement) {
-      this.videoElement.pause();
-      this.videoElement.srcObject = null;
-      this.videoElement = null;
-    }
+    logger.info(`Injecting text into live session: ${text.substring(0, 100)}...`);
 
-    if (this.videoStream) {
-      this.videoStream.getTracks().forEach(track => track.stop());
-      this.videoStream = null;
+    try {
+      const session = await this.sessionPromise;
+      // Send as client content (user message)
+      session.sendClientContent({
+        turns: [{ role: 'user', parts: [{ text }] }],
+        turnComplete: true
+      });
+    } catch (err) {
+      logger.error('Failed to inject text:', err);
     }
-
-    this.videoCanvas = null;
-    this.videoContext = null;
   }
 
   public disconnect() {
@@ -578,10 +598,6 @@ export class GeminiLiveService {
     this.isStreamingAnswer = false;
     this.streamingQuestion = "";
     this.streamedAnswerBuffer = "";
-
-    // Stop video capture
-    this.stopVideoCapture();
-    this.videoConfig = { enabled: false };
     this.onRetrieveContext = null;
 
     // Stop Electron system audio capture

@@ -5,6 +5,7 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { ACTIVITY_PARSER_MODEL } from "../constants";
+import { logger } from "./logger";
 
 export interface ParsedActivity {
   id: string;
@@ -135,11 +136,11 @@ export class ActivityParserService {
         rawText: this.reconstructRawText(act),
       }));
 
-      console.log(`Parsed ${this.parsedActivities.length} activities`);
+      logger.info(`Parsed ${this.parsedActivities.length} activities`);
       return this.parsedActivities;
 
     } catch (error) {
-      console.error('Failed to parse activities:', error);
+      logger.error('Failed to parse activities:', error);
       // Fallback: treat entire text as one activity
       return this.fallbackParse(rawText);
     } finally {

@@ -70,6 +70,8 @@ interface TabbedSidebarProps {
   connectionState: ConnectionState;
   streams: { system?: MediaStream; mic?: MediaStream };
   currentSchool: string;
+  isEmbedding: boolean;
+  embeddingStats?: { qa: number; chunks: number };
 
   // Callbacks
   onSelectModel: (model: string) => void;
@@ -83,6 +85,7 @@ interface TabbedSidebarProps {
   onAddQuestion: () => void;
   onOpenContextModal: () => void;
   onSchoolChange: (school: string) => void;
+  onRefreshEmbeddings: () => void;
 
   // Models list
   liveModels: Array<{ id: string; name: string }>;
@@ -107,6 +110,8 @@ export function TabbedSidebar({
   connectionState,
   streams,
   currentSchool,
+  isEmbedding,
+  embeddingStats,
   onSelectModel,
   onSelectAudioMode,
   onSelectMic,
@@ -118,6 +123,7 @@ export function TabbedSidebar({
   onAddQuestion,
   onOpenContextModal,
   onSchoolChange,
+  onRefreshEmbeddings,
   liveModels,
   isElectron,
   platform,
@@ -126,6 +132,7 @@ export function TabbedSidebar({
 
   // Foldable section states
   const [sections, setSections] = useState({
+    readiness: true,
     school: true,
     cv: false,
     activities: true,
@@ -206,9 +213,75 @@ export function TabbedSidebar({
         {/* PREP TAB */}
         {activeTab === 'prep' && (
           <div>
-            {/* School Selector */}
+            {/* Readiness Status */}
             <FoldableSection
-              title="Target School"
+              title="Session Readiness"
+              isOpen={sections.readiness}
+              onToggle={() => toggleSection('readiness')}
+              badge={isEmbedding ? 'Processing' : 'Ready'}
+              badgeColor={isEmbedding ? 'bg-yellow-600 animate-pulse' : 'bg-green-600'}
+            >
+              {isEmbedding ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-yellow-400">
+                    <div className="h-3 w-3 rounded-full bg-yellow-400 animate-pulse" />
+                    <span className="text-sm font-medium">Embedding your documents...</span>
+                  </div>
+                  <p className="text-xs text-gray-400">
+                    Please wait while we process your CV, activities, and knowledge base for semantic search.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-green-400">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                      <polyline points="22 4 12 14.01 9 11.01" />
+                    </svg>
+                    <span className="text-sm font-medium">Ready to Start Session!</span>
+                  </div>
+                  {embeddingStats && (
+                    <div className="bg-gray-900 rounded p-3 space-y-2">
+                      <div className="flex justify-between text-xs">
+                        <span className="text-gray-400">Knowledge Base</span>
+                        <span className="text-white font-mono">{embeddingStats.qa} Q&A</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-gray-400">Context Chunks</span>
+                        <span className="text-white font-mono">{embeddingStats.chunks} chunks</span>
+                      </div>
+                      <div className="flex justify-between text-xs pt-2 border-t border-gray-700">
+                        <span className="text-gray-400">Total Embeddings</span>
+                        <span className="text-green-400 font-mono font-bold">
+                          {embeddingStats.qa + embeddingStats.chunks}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-500">
+                    All documents embedded and ready for semantic search during your interview.
+                  </p>
+                  {connectionState === ConnectionState.DISCONNECTED && (
+                    <button
+                      onClick={onRefreshEmbeddings}
+                      className="w-full mt-2 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded text-xs transition-colors flex items-center justify-center gap-2"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                        <path d="M3 3v5h5"/>
+                        <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/>
+                        <path d="M21 21v-5h-5"/>
+                      </svg>
+                      Refresh Embeddings
+                    </button>
+                  )}
+                </div>
+              )}
+            </FoldableSection>
+
+            {/* Organization Selector */}
+            <FoldableSection
+              title="Target Organization"
               isOpen={sections.school}
               onToggle={() => toggleSection('school')}
               badge={currentSchool || 'Not Set'}
@@ -218,11 +291,11 @@ export function TabbedSidebar({
                 type="text"
                 value={currentSchool}
                 onChange={(e) => onSchoolChange(e.target.value)}
-                placeholder="e.g., UTSW, Baylor, Harvard"
+                placeholder="e.g., Google, McKinsey, UTSW, Baylor"
                 className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white placeholder-gray-500"
               />
               <p className="text-[10px] text-gray-500 mt-1">
-                School-specific artifacts will be loaded for context
+                Organization-specific artifacts will be loaded for context
               </p>
             </FoldableSection>
 
@@ -423,8 +496,8 @@ export function TabbedSidebar({
             {/* Recording */}
             <FoldableSection
               title="Record Session"
-              isOpen={false}
-              onToggle={() => {}}
+              isOpen={sections.recordings}
+              onToggle={() => toggleSection('recordings')}
             >
               <RecordingPanel
                 streams={streams}

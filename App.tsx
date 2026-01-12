@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { INITIAL_QUESTIONS, LIVE_MODELS } from './constants';
 import { InterviewQA, ConnectionState, TranscriptItem, TokenStats } from './types';
-import { GeminiLiveService, VideoConfig } from './services/geminiService';
+import { GeminiLiveService } from './services/geminiService';
+import { ScreenScannerService } from './services/screenScannerService';
 import { EmbeddingService, EmbeddedChunk, EmbeddingMatch } from './services/embeddingService';
 import { QuestionList } from './components/QuestionList';
 import { Visualizer } from './components/Visualizer';
@@ -13,9 +14,23 @@ import { TabbedSidebar } from './components/TabbedSidebar';
 import { ParsedActivity } from './services/activityParserService';
 import { DEFAULT_SYSTEM_PROMPT, formatCheatSheet, renderPrompt } from './services/promptUtils';
 
-// Pricing Constants for Gemini 1.5 Flash (Example rates)
-const INPUT_PRICE_PER_TOKEN = 0.10 / 1_000_000;
-const OUTPUT_PRICE_PER_TOKEN = 0.40 / 1_000_000;
+// Pricing Constants for Gemini 2.5 Flash Native Audio (Live API)
+// Model: gemini-2.5-flash-native-audio-preview-12-2025
+// Reference: https://ai.google.dev/gemini-api/docs/pricing
+// WARNING: This model is EXPENSIVE compared to standard Flash!
+
+const TEXT_INPUT_PRICE = 0.50 / 1_000_000;           // $0.50 per 1M text tokens
+const TEXT_OUTPUT_PRICE = 2.00 / 1_000_000;          // $2.00 per 1M text tokens
+const AUDIO_VIDEO_INPUT_PRICE = 3.00 / 1_000_000;   // $3.00 per 1M audio/video tokens
+const AUDIO_OUTPUT_PRICE = 12.00 / 1_000_000;       // $12.00 per 1M audio output tokens
+
+// Token conversion rates (from https://ai.google.dev/gemini-api/docs/tokens)
+const AUDIO_TOKENS_PER_SECOND = 32;    // 32 tokens per second of audio
+const VIDEO_TOKENS_PER_SECOND = 263;   // 263 tokens per second of video
+
+// Estimated hourly costs:
+// - Audio-only: ~$0.37/hour
+// - Audio + Video (1 FPS): ~$3.21/hour
 
 // Detect Electron environment
 const isElectron = !!window.electronAPI;
@@ -38,6 +53,7 @@ export default function App() {
   const [hasKey, setHasKey] = useState(false);
   const [questions, setQuestions] = useState<InterviewQA[]>(INITIAL_QUESTIONS);
   const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.DISCONNECTED);
+  const [isEmbedding, setIsEmbedding] = useState(false);
 
   // Context State
   const [company, setCompany] = useState('');
@@ -113,13 +129,15 @@ export default function App() {
 
   const geminiServiceRef = useRef<GeminiLiveService | null>(null);
   const embeddingServiceRef = useRef<EmbeddingService | null>(null);
+  const screenScannerRef = useRef<ScreenScannerService | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement>(null);
 
   // Keep track of streams to stop them later
-  const streamsRef = useRef<{ system?: MediaStream, mic?: MediaStream, video?: MediaStream }>({});
+  const streamsRef = useRef<{ system?: MediaStream, mic?: MediaStream }>({});
 
-  // Video capture state
-  const [videoEnabled, setVideoEnabled] = useState(true); // Enable video by default
+  // Screen scanner state
+  const [isScanning, setIsScanning] = useState(false);
+  const [lastScanResult, setLastScanResult] = useState<string | null>(null);
 
   // Initial Key Check
   useEffect(() => {
@@ -137,6 +155,37 @@ export default function App() {
     };
     checkKey();
   }, []);
+
+  // Initialize embeddings on app load
+  useEffect(() => {
+    const initializeEmbeddings = async () => {
+      if (!hasKey) return;
+
+      // Get API key
+      const apiKey = isElectron && window.electronAPI
+        ? await window.electronAPI.getApiKey()
+        : (process.env.API_KEY || '');
+
+      if (!apiKey) return;
+
+      // Create embedding service
+      embeddingServiceRef.current = new EmbeddingService(apiKey);
+
+      // Try to load cached embeddings
+      const cacheLoaded = embeddingServiceRef.current.loadCachedEmbeddings(questions, company || undefined);
+
+      if (cacheLoaded) {
+        // Embeddings loaded from cache!
+        setParsedActivities(embeddingServiceRef.current.getParsedActivities());
+        console.log('Embeddings loaded from cache');
+      } else {
+        // No cache or documents changed - need to compute embeddings
+        console.log('Cache miss - embeddings need to be computed on session start');
+      }
+    };
+
+    initializeEmbeddings();
+  }, [hasKey, questions, company]);
 
   // Fetch Audio Devices (Mic)
   useEffect(() => {
@@ -171,10 +220,13 @@ export default function App() {
     if (autoSelect || !selectedSystemSource) {
       const platform = window.electronAPI?.platform;
       if (platform === 'win32') {
-        const entireScreen = sources.find(s => s.name.toLowerCase().includes('entire screen') || s.name.toLowerCase().includes('screen 1'));
-        if (entireScreen) {
-          setSelectedSystemSource(entireScreen.id);
+        // Don't auto-select "Entire screen" - let user choose
+        // Prefer window sources over screen capture
+        const window = sources.find(s => !s.name.toLowerCase().includes('entire screen') && !s.name.toLowerCase().includes('screen'));
+        if (window) {
+          setSelectedSystemSource(window.id);
         } else if (sources.length > 0) {
+          // Fallback to first source if no window found
           setSelectedSystemSource(sources[0].id);
         }
       } else {
@@ -276,16 +328,15 @@ export default function App() {
         }
       }
 
-      // Electron: Start system audio + video capture
-      let videoStream: MediaStream | undefined;
-
+      // Electron: Start system audio capture
       if (isElectron && window.electronAPI && audioMode !== 'mic' && selectedSystemSource) {
         const platform = window.electronAPI.platform;
 
         if (platform === 'win32') {
-          // Windows: Use getUserMedia with chromeMediaSource to capture system audio + video
+          // Windows: Must capture video to get audio (they're tied together in desktop capture)
+          // We capture both but only send audio to Gemini
           try {
-            console.log('Attempting Windows system audio/video capture with source:', selectedSystemSource);
+            console.log('Attempting Windows system audio capture with source:', selectedSystemSource);
             const fullStream = await (navigator.mediaDevices as any).getUserMedia({
               audio: {
                 mandatory: {
@@ -297,44 +348,45 @@ export default function App() {
                 mandatory: {
                   chromeMediaSource: 'desktop',
                   chromeMediaSourceId: selectedSystemSource,
-                  maxWidth: 1920,
-                  maxHeight: 1080
+                  maxWidth: 1,  // Minimal video - we only need it to unlock audio
+                  maxHeight: 1
                 }
               }
             });
 
-            // Separate audio and video streams
             const audioTracks = fullStream.getAudioTracks();
             const videoTracks = fullStream.getVideoTracks();
+
+            // Stop video tracks immediately - we don't need them
+            videoTracks.forEach(track => track.stop());
 
             if (audioTracks.length > 0) {
               systemStream = new MediaStream(audioTracks);
               console.log('Windows system audio capture started, audio tracks:', audioTracks.length);
             } else {
-              console.warn('No audio tracks captured!');
-              alert('No audio was captured. Make sure you have audio playing and try "Entire Screen".');
-            }
-
-            // Keep video stream if enabled
-            if (videoEnabled && videoTracks.length > 0) {
-              videoStream = new MediaStream(videoTracks);
-              console.log('Windows video capture started, video tracks:', videoTracks.length);
-            } else {
-              // Stop video tracks if not needed
-              videoTracks.forEach(track => track.stop());
+              console.error('No audio tracks captured!');
+              alert('No audio was captured from this source. Please:\n\n1. START PLAYING AUDIO first (YouTube, music, etc.)\n2. Then click Start while audio is playing\n3. Try selecting a different source\n4. For best results, use "Entire Screen"');
+              return; // Don't continue with connection
             }
           } catch (err) {
-            console.error('Failed to capture Windows system audio/video:', err);
-            alert('Failed to capture system audio. Please select a different source.');
+            console.error('Failed to capture Windows system audio:', err);
+            alert('Failed to capture system audio. Please:\n\n1. Select a different source from the dropdown\n2. Make sure audio is ACTIVELY PLAYING\n3. Try selecting "Entire Screen" (works most reliably)\n4. Check Windows privacy settings allow screen recording');
+            return; // Don't continue with connection
           }
         } else {
-          // Linux: Use IPC to start PulseAudio capture (audio only for now)
+          // Linux: Use IPC to start PulseAudio capture
           await window.electronAPI.startSystemAudio(selectedSystemSource);
-          // TODO: Add Linux video capture support
         }
       }
 
-      streamsRef.current = { mic: micStream, system: systemStream, video: videoStream };
+      // Validate we have at least one audio stream before connecting
+      if (!micStream && !systemStream) {
+        console.error('No valid audio streams available');
+        alert('No audio stream available. Please check your audio source selection and try again.');
+        return;
+      }
+
+      streamsRef.current = { mic: micStream, system: systemStream };
       setMediaStream(micStream || systemStream || null);
 
       startGeminiSession(streamsRef.current);
@@ -359,7 +411,7 @@ export default function App() {
     }
   };
 
-  const startGeminiSession = async (streams: { system?: MediaStream, mic?: MediaStream, video?: MediaStream }, forceMicOnly = false, isReconnect = false) => {
+  const startGeminiSession = async (streams: { system?: MediaStream, mic?: MediaStream }, forceMicOnly = false, isReconnect = false) => {
     setConnectionState(isReconnect ? ConnectionState.RECONNECTING : ConnectionState.CONNECTING);
 
     // Only clear state on fresh connection, not on reconnect
@@ -389,17 +441,32 @@ export default function App() {
     if (!embeddingServiceRef.current) {
       embeddingServiceRef.current = new EmbeddingService(apiKey);
     }
+
     // Initialize comprehensive embeddings including CV, activities, and artifacts
-    embeddingServiceRef.current.initializeAllEmbeddings(questions, company || undefined)
-      .then(() => {
+    // Try to load from cache first, only compute if needed
+    const stats = embeddingServiceRef.current.getTotalEmbeddings();
+    const hasEmbeddings = stats.qa > 0 || stats.chunks > 0;
+
+    if (!hasEmbeddings) {
+      // No embeddings loaded - need to compute them
+      try {
+        setIsEmbedding(true);
+        console.log('Computing embeddings for the first time...');
+        await embeddingServiceRef.current.initializeAllEmbeddings(questions, company || undefined);
         // Update parsed activities state after initialization
         if (embeddingServiceRef.current) {
           setParsedActivities(embeddingServiceRef.current.getParsedActivities());
         }
-      })
-      .catch(err => {
+        console.log('Embeddings initialized and saved to cache');
+      } catch (err) {
         console.warn('Failed to initialize embeddings:', err);
-      });
+        // Continue anyway - embeddings are optional
+      } finally {
+        setIsEmbedding(false);
+      }
+    } else {
+      console.log(`Using cached embeddings: ${stats.qa} Q&A, ${stats.chunks} chunks`);
+    }
 
     console.log("Using System Prompt:", systemInstruction);
 
@@ -412,14 +479,10 @@ export default function App() {
     // In Electron, we pass systemAudioSource ID for the service to handle
     const electronConfig = isElectron ? { systemAudioSource: selectedSystemSource } : undefined;
 
-    // Video configuration
-    const videoConfig: VideoConfig = {
-      enabled: videoEnabled && !!streamsToConnect.video,
-      frameRate: 1, // 1 fps to save tokens
-      quality: 0.7,
-      maxWidth: 1280,
-      maxHeight: 720,
-    };
+    // Initialize screen scanner service
+    if (!screenScannerRef.current) {
+      screenScannerRef.current = new ScreenScannerService(apiKey);
+    }
 
     await geminiServiceRef.current.connect(streamsToConnect, selectedModel, systemInstruction, {
       onOpen: () => setConnectionState(ConnectionState.CONNECTED),
@@ -514,12 +577,28 @@ export default function App() {
         }]);
         setCurrentTranscript('');
       },
-      onTokenUpdate: (input, output) => {
-        const cost = (input * INPUT_PRICE_PER_TOKEN) + (output * OUTPUT_PRICE_PER_TOKEN);
+      onTokenUpdate: (tokenData) => {
+        // Calculate cost with correct modality pricing
+        const cost =
+          (tokenData.textInput * TEXT_INPUT_PRICE) +
+          (tokenData.audioVideoInput * AUDIO_VIDEO_INPUT_PRICE) +
+          (tokenData.textOutput * TEXT_OUTPUT_PRICE) +
+          (tokenData.audioOutput * AUDIO_OUTPUT_PRICE);
+
+        console.log(`[App] Token update:`, {
+          textInput: tokenData.textInput,
+          audioVideoInput: tokenData.audioVideoInput,
+          textOutput: tokenData.textOutput,
+          audioOutput: tokenData.audioOutput,
+          totalInput: tokenData.totalInput,
+          totalOutput: tokenData.totalOutput,
+          cost: `$${cost.toFixed(6)}`
+        });
+
         setTokenStats({
-          inputTokens: input,
-          outputTokens: output,
-          totalTokens: input + output,
+          inputTokens: tokenData.totalInput,
+          outputTokens: tokenData.totalOutput,
+          totalTokens: tokenData.totalInput + tokenData.totalOutput,
           estimatedCost: cost
         });
       },
@@ -552,8 +631,36 @@ export default function App() {
           }
         }, 2000);
       }
-    }, electronConfig, videoConfig);
+    }, electronConfig);
   };
+
+  const refreshEmbeddings = useCallback(async () => {
+    if (!embeddingServiceRef.current || connectionState !== ConnectionState.DISCONNECTED) return;
+
+    const apiKey = isElectron && window.electronAPI
+      ? await window.electronAPI.getApiKey()
+      : (process.env.API_KEY || '');
+
+    if (!apiKey) return;
+
+    try {
+      setIsEmbedding(true);
+      // Clear cache
+      embeddingServiceRef.current.clearCachedEmbeddings();
+      embeddingServiceRef.current.clearCache();
+
+      // Re-initialize
+      console.log('Refreshing embeddings...');
+      await embeddingServiceRef.current.initializeAllEmbeddings(questions, company || undefined);
+      setParsedActivities(embeddingServiceRef.current.getParsedActivities());
+      console.log('Embeddings refreshed successfully');
+    } catch (err) {
+      console.error('Failed to refresh embeddings:', err);
+      alert('Failed to refresh embeddings. Check console for details.');
+    } finally {
+      setIsEmbedding(false);
+    }
+  }, [questions, company, connectionState, isElectron]);
 
   const handleDisconnect = useCallback(() => {
     if (geminiServiceRef.current) {
@@ -568,7 +675,6 @@ export default function App() {
 
     if (streamsRef.current.system) streamsRef.current.system.getTracks().forEach(t => t.stop());
     if (streamsRef.current.mic) streamsRef.current.mic.getTracks().forEach(t => t.stop());
-    if (streamsRef.current.video) streamsRef.current.video.getTracks().forEach(t => t.stop());
     streamsRef.current = {};
     setMediaStream(null);
 
@@ -604,6 +710,39 @@ export default function App() {
     }
     setIsEditing(false);
     setCurrentEdit({});
+  };
+
+  // Screen scan handler - captures screen and detects questions
+  const handleScreenScan = async () => {
+    if (!screenScannerRef.current || !geminiServiceRef.current) {
+      console.warn('Screen scanner or Gemini service not initialized');
+      return;
+    }
+
+    setIsScanning(true);
+    setLastScanResult(null);
+
+    try {
+      const result = await screenScannerRef.current.scanScreen();
+
+      if (result.hasQuestion && result.question) {
+        setLastScanResult(result.question);
+        console.log('Question detected from screen:', result.question);
+
+        // Inject the detected question into the live session
+        await geminiServiceRef.current.injectText(
+          `[SCREEN CAPTURE] The interviewer is showing this question on screen: "${result.question}"`
+        );
+      } else {
+        setLastScanResult('No question detected');
+        console.log('No question detected on screen');
+      }
+    } catch (err) {
+      console.error('Screen scan failed:', err);
+      setLastScanResult('Scan failed');
+    } finally {
+      setIsScanning(false);
+    }
   };
 
   if (!hasKey) {
@@ -663,6 +802,27 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-4">
+            {/* Scan Screen Button - Only show when connected */}
+            {connectionState === ConnectionState.CONNECTED && (
+              <button
+                onClick={handleScreenScan}
+                disabled={isScanning}
+                className={`px-3 py-1 text-xs rounded transition-colors flex items-center gap-1.5 ${
+                  isScanning
+                    ? 'bg-yellow-600 text-white'
+                    : 'bg-cyan-600 hover:bg-cyan-500 text-white'
+                }`}
+                title="Scan screen for interview questions"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                  <line x1="8" y1="21" x2="16" y2="21"/>
+                  <line x1="12" y1="17" x2="12" y2="21"/>
+                </svg>
+                {isScanning ? 'Scanning...' : 'Scan Screen'}
+              </button>
+            )}
+
             {/* Live Answer Panel Toggle */}
             <button
               onClick={() => setShowLiveAnswerPanel(!showLiveAnswerPanel)}
@@ -705,7 +865,12 @@ export default function App() {
               />
             </div>
 
-            {connectionState === ConnectionState.DISCONNECTED ? (
+            {isEmbedding ? (
+              <div className="flex items-center gap-2 px-4 py-2 bg-purple-600/30 border border-purple-500/50 rounded text-sm backdrop-blur-sm">
+                <div className="h-3 w-3 rounded-full bg-purple-400 animate-pulse" />
+                <span className="text-purple-200">Memorizing your background... just a moment!</span>
+              </div>
+            ) : connectionState === ConnectionState.DISCONNECTED ? (
               <div className="flex gap-2">
                 <button
                   onClick={startMicCaptureOnly}
@@ -878,6 +1043,12 @@ export default function App() {
             connectionState={connectionState}
             streams={streamsRef.current}
             currentSchool={company}
+            isEmbedding={isEmbedding}
+            embeddingStats={
+              embeddingServiceRef.current
+                ? embeddingServiceRef.current.getTotalEmbeddings()
+                : undefined
+            }
             onSelectModel={setSelectedModel}
             onSelectAudioMode={setAudioMode}
             onSelectMic={setSelectedMicId}
@@ -889,6 +1060,7 @@ export default function App() {
             onAddQuestion={() => { setCurrentEdit({}); setIsEditing(true); }}
             onOpenContextModal={() => setShowContextModal(true)}
             onSchoolChange={setCompany}
+            onRefreshEmbeddings={refreshEmbeddings}
             liveModels={LIVE_MODELS}
             isElectron={isElectron}
             platform={window.electronAPI?.platform}

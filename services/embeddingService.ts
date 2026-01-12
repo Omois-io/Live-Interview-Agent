@@ -12,7 +12,9 @@ import { InterviewQA } from "../types";
 import { contextService } from "./contextService";
 import { artifactService, ArtifactChunk } from "./artifactService";
 import { ActivityParserService, ParsedActivity } from "./activityParserService";
+import { CVParserService, ParsedCVSection } from "./cvParserService";
 import { EMBEDDING_MODEL, ACTIVITY_PARSER_MODEL } from "../constants";
+import { logger } from "./logger";
 
 export interface EmbeddingMatch {
   id: string;
@@ -35,17 +37,27 @@ export interface EmbeddedChunk {
   };
 }
 
+// Storage keys
+const EMBEDDINGS_CACHE_KEY = "interview_hud_embeddings_cache";
+const EMBEDDINGS_QUESTIONS_KEY = "interview_hud_embeddings_questions";
+const EMBEDDINGS_CHUNKS_KEY = "interview_hud_embeddings_chunks";
+const EMBEDDINGS_ACTIVITIES_KEY = "interview_hud_embeddings_activities";
+const EMBEDDINGS_CV_SECTIONS_KEY = "interview_hud_embeddings_cv_sections";
+const EMBEDDINGS_HASH_KEY = "interview_hud_embeddings_hash";
+
 export class EmbeddingService {
   private ai: GoogleGenAI;
   private cache: Map<string, number[]> = new Map();
   private questionMap: Map<string, InterviewQA> = new Map();
   private chunks: EmbeddedChunk[] = [];
   private parsedActivities: ParsedActivity[] = [];
+  private parsedCVSections: ParsedCVSection[] = [];
   private activityParser: ActivityParserService;
+  private cvParser: CVParserService;
   private isInitialized: boolean = false;
   private embeddingModel: string;
 
-  // Chunk configuration
+  // Chunk configuration (fallback only)
   private readonly CHUNK_SIZE = 500;
   private readonly CHUNK_OVERLAP = 50;
 
@@ -57,6 +69,7 @@ export class EmbeddingService {
     this.ai = new GoogleGenAI({ apiKey });
     this.embeddingModel = embeddingModel;
     this.activityParser = new ActivityParserService(apiKey, parserModel);
+    this.cvParser = new CVParserService(apiKey, parserModel);
   }
 
   /**
@@ -76,7 +89,7 @@ export class EmbeddingService {
 
       throw new Error("No embeddings returned from API");
     } catch (error) {
-      console.error("Error getting embedding:", error);
+      logger.error("Error getting embedding", error);
       throw error;
     }
   }
@@ -86,7 +99,7 @@ export class EmbeddingService {
    * Call this once when session starts or when questions change
    */
   async initializeEmbeddings(questions: InterviewQA[]): Promise<void> {
-    console.log(`Initializing embeddings for ${questions.length} questions...`);
+    logger.info(`Initializing embeddings for ${questions.length} questions...`);
 
     this.cache.clear();
     this.questionMap.clear();
@@ -97,12 +110,12 @@ export class EmbeddingService {
         this.cache.set(q.id, embedding);
         this.questionMap.set(q.id, q);
       } catch (error) {
-        console.error(`Failed to embed question ${q.id}:`, error);
+        logger.error(`Failed to embed question ${q.id}:`, error);
       }
     }
 
     this.isInitialized = true;
-    console.log(`Embeddings initialized for ${this.cache.size} questions`);
+    logger.info(`Embeddings initialized for ${this.cache.size} questions`);
   }
 
   /**
@@ -130,7 +143,7 @@ export class EmbeddingService {
     }
 
     if (bestMatch) {
-      console.log(`Embedding match found: "${bestMatch.question}" (score: ${bestMatch.score.toFixed(3)})`);
+      logger.info(`Embedding match found: "${bestMatch.question}" (score: ${bestMatch.score.toFixed(3)})`);
     }
 
     return bestMatch;
@@ -184,7 +197,9 @@ export class EmbeddingService {
     this.questionMap.clear();
     this.chunks = [];
     this.parsedActivities = [];
+    this.parsedCVSections = [];
     this.activityParser.clear();
+    this.cvParser.clear();
     this.isInitialized = false;
   }
 
@@ -197,27 +212,56 @@ export class EmbeddingService {
     questions: InterviewQA[],
     schoolName?: string
   ): Promise<void> {
-    console.log('Initializing comprehensive embeddings...');
+    logger.info('Initializing comprehensive embeddings...');
 
     // 1. Initialize Q&A embeddings (existing behavior)
     await this.initializeEmbeddings(questions);
 
-    // 2. Embed CV chunks
+    // 2. Parse and embed CV sections using Gemini
     const cv = contextService.loadCV();
     if (cv) {
-      const cvChunks = this.chunkText(cv, 'cv');
-      for (const chunk of cvChunks) {
-        try {
-          const embedding = await this.embedText(chunk.content);
-          this.chunks.push({
-            ...chunk,
-            embedding,
-          });
-        } catch (error) {
-          console.error('Failed to embed CV chunk:', error);
+      try {
+        // Parse CV into structured sections
+        logger.info('Parsing CV with Gemini...');
+        this.parsedCVSections = await this.cvParser.parseCV(cv);
+
+        // Embed each CV section individually
+        const cvSections = this.cvParser.getSectionsForEmbedding();
+        for (const section of cvSections) {
+          try {
+            const embedding = await this.embedText(section.content);
+            this.chunks.push({
+              id: section.id,
+              content: section.content,
+              source: `CV: ${section.sectionType}`,
+              type: 'cv',
+              embedding,
+              metadata: {
+                sectionType: section.sectionType,
+                themes: section.themes,
+              },
+            });
+          } catch (error) {
+            logger.error('Failed to embed CV section:', error);
+          }
+        }
+        logger.info(`Parsed and embedded ${this.parsedCVSections.length} CV sections`);
+      } catch (error) {
+        logger.error('Failed to parse CV, falling back to chunking:', error);
+        // Fallback to simple chunking
+        const cvChunks = this.chunkText(cv, 'cv');
+        for (const chunk of cvChunks) {
+          try {
+            const embedding = await this.embedText(chunk.content);
+            this.chunks.push({
+              ...chunk,
+              embedding,
+            });
+          } catch (error) {
+            logger.error('Failed to embed CV chunk:', error);
+          }
         }
       }
-      console.log(`Embedded ${cvChunks.length} CV chunks`);
     }
 
     // 3. Parse and embed individual activities using Gemini
@@ -225,7 +269,7 @@ export class EmbeddingService {
     if (activitiesRaw) {
       try {
         // Parse activities into structured format
-        console.log('Parsing activities with Gemini...');
+        logger.info('Parsing activities with Gemini...');
         this.parsedActivities = await this.activityParser.parseActivities(activitiesRaw);
 
         // Embed each activity individually
@@ -246,12 +290,12 @@ export class EmbeddingService {
               },
             });
           } catch (error) {
-            console.error('Failed to embed activity:', error);
+            logger.error('Failed to embed activity:', error);
           }
         }
-        console.log(`Parsed and embedded ${this.parsedActivities.length} individual activities`);
+        logger.info(`Parsed and embedded ${this.parsedActivities.length} individual activities`);
       } catch (error) {
-        console.error('Failed to parse activities, falling back to chunking:', error);
+        logger.error('Failed to parse activities, falling back to chunking:', error);
         // Fallback to simple chunking
         const activityChunks = this.chunkText(activitiesRaw, 'activities');
         for (const chunk of activityChunks) {
@@ -262,7 +306,7 @@ export class EmbeddingService {
               embedding,
             });
           } catch (error) {
-            console.error('Failed to embed activities chunk:', error);
+            logger.error('Failed to embed activities chunk:', error);
           }
         }
       }
@@ -286,13 +330,16 @@ export class EmbeddingService {
             },
           });
         } catch (error) {
-          console.error('Failed to embed artifact chunk:', error);
+          logger.error('Failed to embed artifact chunk:', error);
         }
       }
-      console.log(`Embedded ${artifactChunks.length} artifact chunks for ${schoolName}`);
+      logger.info(`Embedded ${artifactChunks.length} artifact chunks for ${schoolName}`);
     }
 
-    console.log(`Total embedded chunks: ${this.chunks.length}`);
+    logger.info(`Total embedded chunks: ${this.chunks.length}`);
+
+    // Save embeddings to localStorage for next session
+    this.saveEmbeddings(questions, schoolName);
   }
 
   /**
@@ -435,10 +482,24 @@ export class EmbeddingService {
   }
 
   /**
+   * Get parsed CV sections for display
+   */
+  getParsedCVSections(): ParsedCVSection[] {
+    return this.parsedCVSections;
+  }
+
+  /**
    * Get activity parser instance for direct access
    */
   getActivityParser(): ActivityParserService {
     return this.activityParser;
+  }
+
+  /**
+   * Get CV parser instance for direct access
+   */
+  getCVParser(): CVParserService {
+    return this.cvParser;
   }
 
   /**
@@ -447,7 +508,7 @@ export class EmbeddingService {
    */
   private cosineSimilarity(a: number[], b: number[]): number {
     if (a.length !== b.length) {
-      console.warn("Embedding dimension mismatch:", a.length, "vs", b.length);
+      logger.warn("Embedding dimension mismatch:", a.length, "vs", b.length);
       return 0;
     }
 
@@ -468,5 +529,122 @@ export class EmbeddingService {
     }
 
     return dotProduct / magnitude;
+  }
+
+  /**
+   * Generate a simple hash of the source documents to detect changes
+   */
+  private hashDocuments(questions: InterviewQA[], schoolName?: string): string {
+    const cv = contextService.loadCV() || '';
+    const activities = contextService.loadActivities() || '';
+    const artifacts = schoolName ? artifactService.getSchoolArtifactChunks(schoolName) : [];
+
+    const questionsStr = questions.map(q => `${q.id}:${q.question}:${q.answer}`).join('|');
+    const artifactsStr = artifacts.map(a => `${a.id}:${a.content}`).join('|');
+
+    const combined = `${questionsStr}|${cv}|${activities}|${artifactsStr}`;
+
+    // Simple hash function
+    let hash = 0;
+    for (let i = 0; i < combined.length; i++) {
+      const char = combined.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    return hash.toString(36);
+  }
+
+  /**
+   * Save embeddings to localStorage
+   */
+  private saveEmbeddings(questions: InterviewQA[], schoolName?: string): void {
+    try {
+      if (typeof window === 'undefined' || !window.localStorage) return;
+
+      const hash = this.hashDocuments(questions, schoolName);
+
+      // Convert Map to array for storage
+      const cacheArray = Array.from(this.cache.entries());
+      const questionMapArray = Array.from(this.questionMap.entries());
+
+      localStorage.setItem(EMBEDDINGS_CACHE_KEY, JSON.stringify(cacheArray));
+      localStorage.setItem(EMBEDDINGS_QUESTIONS_KEY, JSON.stringify(questionMapArray));
+      localStorage.setItem(EMBEDDINGS_CHUNKS_KEY, JSON.stringify(this.chunks));
+      localStorage.setItem(EMBEDDINGS_ACTIVITIES_KEY, JSON.stringify(this.parsedActivities));
+      localStorage.setItem(EMBEDDINGS_CV_SECTIONS_KEY, JSON.stringify(this.parsedCVSections));
+      localStorage.setItem(EMBEDDINGS_HASH_KEY, hash);
+
+      logger.info(`Saved embeddings: ${this.cache.size} Q&A, ${this.chunks.length} chunks (${this.parsedCVSections.length} CV sections, ${this.parsedActivities.length} activities), hash: ${hash}`);
+    } catch (error) {
+      logger.warn('Failed to save embeddings to localStorage:', error);
+    }
+  }
+
+  /**
+   * Load embeddings from localStorage if they exist and documents haven't changed
+   * Returns true if loaded successfully, false otherwise
+   */
+  loadCachedEmbeddings(questions: InterviewQA[], schoolName?: string): boolean {
+    try {
+      if (typeof window === 'undefined' || !window.localStorage) return false;
+
+      const savedHash = localStorage.getItem(EMBEDDINGS_HASH_KEY);
+      const currentHash = this.hashDocuments(questions, schoolName);
+
+      // Check if documents have changed
+      if (savedHash !== currentHash) {
+        logger.info('Documents have changed, embeddings cache invalid');
+        return false;
+      }
+
+      // Load cached data
+      const cacheData = localStorage.getItem(EMBEDDINGS_CACHE_KEY);
+      const questionsData = localStorage.getItem(EMBEDDINGS_QUESTIONS_KEY);
+      const chunksData = localStorage.getItem(EMBEDDINGS_CHUNKS_KEY);
+      const activitiesData = localStorage.getItem(EMBEDDINGS_ACTIVITIES_KEY);
+      const cvSectionsData = localStorage.getItem(EMBEDDINGS_CV_SECTIONS_KEY);
+
+      if (!cacheData || !questionsData || !chunksData) {
+        logger.info('No cached embeddings found');
+        return false;
+      }
+
+      // Restore data structures
+      const cacheArray: [string, number[]][] = JSON.parse(cacheData);
+      const questionMapArray: [string, InterviewQA][] = JSON.parse(questionsData);
+
+      this.cache = new Map(cacheArray);
+      this.questionMap = new Map(questionMapArray);
+      this.chunks = JSON.parse(chunksData);
+      this.parsedActivities = activitiesData ? JSON.parse(activitiesData) : [];
+      this.parsedCVSections = cvSectionsData ? JSON.parse(cvSectionsData) : [];
+      this.isInitialized = true;
+
+      logger.info(`Loaded cached embeddings: ${this.cache.size} Q&A, ${this.chunks.length} chunks (${this.parsedCVSections.length} CV sections, ${this.parsedActivities.length} activities)`);
+      return true;
+    } catch (error) {
+      logger.warn('Failed to load cached embeddings:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Clear cached embeddings from localStorage
+   */
+  clearCachedEmbeddings(): void {
+    try {
+      if (typeof window === 'undefined' || !window.localStorage) return;
+
+      localStorage.removeItem(EMBEDDINGS_CACHE_KEY);
+      localStorage.removeItem(EMBEDDINGS_QUESTIONS_KEY);
+      localStorage.removeItem(EMBEDDINGS_CHUNKS_KEY);
+      localStorage.removeItem(EMBEDDINGS_ACTIVITIES_KEY);
+      localStorage.removeItem(EMBEDDINGS_CV_SECTIONS_KEY);
+      localStorage.removeItem(EMBEDDINGS_HASH_KEY);
+
+      logger.info('Cleared cached embeddings');
+    } catch (error) {
+      logger.warn('Failed to clear cached embeddings:', error);
+    }
   }
 }

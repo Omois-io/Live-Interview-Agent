@@ -7,6 +7,7 @@ export interface RecordingMetadata {
   id: string;
   name: string;
   type: 'orientation' | 'interview' | 'practice' | 'other';
+  mediaType: 'audio' | 'video';
   schoolName?: string;
   duration: number; // in seconds
   startTime: number;
@@ -28,17 +29,18 @@ type RecordingCallback = {
 
 export class RecordingService {
   private mediaRecorder: MediaRecorder | null = null;
-  private audioChunks: Blob[] = [];
+  private mediaChunks: Blob[] = [];
   private isRecording: boolean = false;
   private startTime: number = 0;
   private currentMetadata: Partial<RecordingMetadata> = {};
   private callbacks: RecordingCallback = {};
+  private isVideoRecording: boolean = false;
 
   /**
-   * Start recording from the given audio streams
+   * Start recording from the given streams (audio and/or video)
    */
   startRecording(
-    streams: { system?: MediaStream; mic?: MediaStream },
+    streams: { system?: MediaStream; mic?: MediaStream; video?: MediaStream },
     metadata: Partial<RecordingMetadata>,
     callbacks: RecordingCallback
   ): boolean {
@@ -47,44 +49,60 @@ export class RecordingService {
       return false;
     }
 
-    // Combine streams if both available
-    const combinedStream = this.combineStreams(streams);
+    // Determine if this is video or audio recording
+    this.isVideoRecording = metadata.mediaType === 'video' && !!streams.video;
+
+    // Combine streams based on recording type
+    const combinedStream = this.isVideoRecording
+      ? this.combineVideoStreams(streams)
+      : this.combineAudioStreams(streams);
+
     if (!combinedStream) {
-      callbacks.onError?.(new Error('No audio stream available'));
+      callbacks.onError?.(new Error(this.isVideoRecording ? 'No video stream available' : 'No audio stream available'));
       return false;
     }
 
-    this.audioChunks = [];
+    this.mediaChunks = [];
     this.callbacks = callbacks;
     this.currentMetadata = {
       ...metadata,
       id: Date.now().toString(),
       startTime: Date.now(),
+      mediaType: this.isVideoRecording ? 'video' : 'audio',
     };
 
     try {
-      // Use webm format with opus codec for good quality/size ratio
-      const mimeType = this.getSupportedMimeType();
-      this.mediaRecorder = new MediaRecorder(combinedStream, {
+      // Use appropriate format based on recording type
+      const mimeType = this.isVideoRecording ? this.getSupportedVideoMimeType() : this.getSupportedAudioMimeType();
+      const recorderOptions: MediaRecorderOptions = {
         mimeType,
-        audioBitsPerSecond: 128000,
-      });
+      };
+
+      if (this.isVideoRecording) {
+        recorderOptions.videoBitsPerSecond = 2500000; // 2.5 Mbps
+        recorderOptions.audioBitsPerSecond = 128000;
+      } else {
+        recorderOptions.audioBitsPerSecond = 128000;
+      }
+
+      this.mediaRecorder = new MediaRecorder(combinedStream, recorderOptions);
 
       this.mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
-          this.audioChunks.push(event.data);
+          this.mediaChunks.push(event.data);
           callbacks.onDataAvailable?.(event.data);
         }
       };
 
       this.mediaRecorder.onstop = () => {
-        const blob = new Blob(this.audioChunks, { type: mimeType });
+        const blob = new Blob(this.mediaChunks, { type: mimeType });
         const duration = (Date.now() - this.startTime) / 1000;
 
         const finalMetadata: RecordingMetadata = {
           id: this.currentMetadata.id || Date.now().toString(),
           name: this.currentMetadata.name || `Recording ${new Date().toLocaleDateString()}`,
           type: this.currentMetadata.type || 'other',
+          mediaType: this.currentMetadata.mediaType || 'audio',
           schoolName: this.currentMetadata.schoolName,
           duration,
           startTime: this.startTime,
@@ -142,7 +160,7 @@ export class RecordingService {
   /**
    * Combine multiple audio streams into one
    */
-  private combineStreams(streams: { system?: MediaStream; mic?: MediaStream }): MediaStream | null {
+  private combineAudioStreams(streams: { system?: MediaStream; mic?: MediaStream }): MediaStream | null {
     const tracks: MediaStreamTrack[] = [];
 
     if (streams.system) {
@@ -165,9 +183,34 @@ export class RecordingService {
   }
 
   /**
-   * Get supported MIME type for recording
+   * Combine video stream with audio streams
    */
-  private getSupportedMimeType(): string {
+  private combineVideoStreams(streams: { system?: MediaStream; mic?: MediaStream; video?: MediaStream }): MediaStream | null {
+    const tracks: MediaStreamTrack[] = [];
+
+    // Add video track
+    if (streams.video) {
+      streams.video.getVideoTracks().forEach(track => tracks.push(track));
+    }
+
+    // Add audio tracks
+    if (streams.system) {
+      streams.system.getAudioTracks().forEach(track => tracks.push(track));
+    }
+    if (streams.mic) {
+      streams.mic.getAudioTracks().forEach(track => tracks.push(track));
+    }
+
+    // Must have at least video
+    if (!streams.video || tracks.length === 0) return null;
+
+    return new MediaStream(tracks);
+  }
+
+  /**
+   * Get supported MIME type for audio recording
+   */
+  private getSupportedAudioMimeType(): string {
     const types = [
       'audio/webm;codecs=opus',
       'audio/webm',
@@ -182,6 +225,26 @@ export class RecordingService {
     }
 
     return 'audio/webm'; // Fallback
+  }
+
+  /**
+   * Get supported MIME type for video recording
+   */
+  private getSupportedVideoMimeType(): string {
+    const types = [
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+      'video/mp4',
+    ];
+
+    for (const type of types) {
+      if (MediaRecorder.isTypeSupported(type)) {
+        return type;
+      }
+    }
+
+    return 'video/webm'; // Fallback
   }
 
   /**
@@ -206,14 +269,26 @@ export class RecordingService {
         .replace(/[^a-z0-9]/gi, '_')
         .toLowerCase();
       const timestamp = new Date(metadata.startTime).toISOString().replace(/[:.]/g, '-');
-      const extension = blob.type.includes('webm') ? 'webm' : 'ogg';
+
+      // Determine extension based on media type
+      const isVideo = metadata.mediaType === 'video';
+      let extension = 'webm';
+      if (isVideo) {
+        extension = blob.type.includes('mp4') ? 'mp4' : 'webm';
+      } else {
+        extension = blob.type.includes('ogg') ? 'ogg' : 'webm';
+      }
+
       const filename = `${sanitizedName}_${timestamp}.${extension}`;
+
+      // Determine directory based on media type
+      const targetDirectory = directory || (isVideo ? 'saved_video' : 'saved_audio');
 
       // Save via Electron IPC
       const filePath = await window.electronAPI.saveRecording({
         data: Array.from(uint8Array),
         filename,
-        directory: directory || 'recordings',
+        directory: targetDirectory,
         metadata,
       });
 

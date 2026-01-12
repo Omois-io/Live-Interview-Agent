@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { contextService } from '../services/contextService';
+import { FileParserService } from '../services/fileParserService';
 
 interface ContextModalProps {
   isOpen: boolean;
@@ -10,6 +11,15 @@ export const ContextModal: React.FC<ContextModalProps> = ({ isOpen, onClose }) =
   const [cv, setCV] = useState('');
   const [activities, setActivities] = useState('');
   const [saved, setSaved] = useState(false);
+  const [isUploadingCV, setIsUploadingCV] = useState(false);
+  const [isUploadingActivities, setIsUploadingActivities] = useState(false);
+
+  // Refs for file inputs
+  const cvFileInputRef = useRef<HTMLInputElement>(null);
+  const activitiesFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Check if running in Electron
+  const isElectron = typeof window !== 'undefined' && window.electronAPI;
 
   // Load existing data when modal opens
   useEffect(() => {
@@ -34,6 +44,69 @@ export const ContextModal: React.FC<ContextModalProps> = ({ isOpen, onClose }) =
     setCV('');
     setActivities('');
     setSaved(false);
+  };
+
+  // CV file upload handler
+  const handleCVFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingCV(true);
+    try {
+      // Get API key
+      const apiKey = isElectron && window.electronAPI
+        ? await window.electronAPI.getApiKey()
+        : import.meta.env.VITE_GEMINI_API_KEY;
+
+      if (!apiKey) {
+        throw new Error('API key not configured');
+      }
+
+      // Parse file
+      const parser = new FileParserService(apiKey);
+      const text = await parser.parseFile(file);
+
+      // Populate textarea
+      setCV(text);
+    } catch (error) {
+      console.error('CV upload failed:', error);
+      alert(`Failed to upload file: ${(error as Error).message}`);
+    } finally {
+      setIsUploadingCV(false);
+      // Reset file input
+      if (cvFileInputRef.current) {
+        cvFileInputRef.current.value = '';
+      }
+    }
+  };
+
+  // Activities file upload handler
+  const handleActivitiesFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingActivities(true);
+    try {
+      const apiKey = isElectron && window.electronAPI
+        ? await window.electronAPI.getApiKey()
+        : import.meta.env.VITE_GEMINI_API_KEY;
+
+      if (!apiKey) {
+        throw new Error('API key not configured');
+      }
+
+      const parser = new FileParserService(apiKey);
+      const text = await parser.parseFile(file);
+      setActivities(text);
+    } catch (error) {
+      console.error('Activities upload failed:', error);
+      alert(`Failed to upload file: ${(error as Error).message}`);
+    } finally {
+      setIsUploadingActivities(false);
+      if (activitiesFileInputRef.current) {
+        activitiesFileInputRef.current.value = '';
+      }
+    }
   };
 
   if (!isOpen) return null;
@@ -62,9 +135,27 @@ export const ContextModal: React.FC<ContextModalProps> = ({ isOpen, onClose }) =
         <div className="space-y-5">
           {/* CV / Personal Statement */}
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
-              CV / Personal Statement
-            </label>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-sm font-medium text-gray-300">
+                CV / Personal Statement
+              </label>
+              <div className="flex gap-2">
+                <input
+                  ref={cvFileInputRef}
+                  type="file"
+                  accept=".pdf,.docx,.txt"
+                  onChange={handleCVFileUpload}
+                  className="hidden"
+                />
+                <button
+                  onClick={() => cvFileInputRef.current?.click()}
+                  disabled={isUploadingCV}
+                  className="text-xs px-3 py-1 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-white transition-colors"
+                >
+                  {isUploadingCV ? 'Uploading...' : '📄 Upload File'}
+                </button>
+              </div>
+            </div>
             <textarea
               value={cv}
               onChange={(e) => setCV(e.target.value)}
@@ -78,9 +169,27 @@ export const ContextModal: React.FC<ContextModalProps> = ({ isOpen, onClose }) =
 
           {/* 15 Activities */}
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
-              15 Activities (AMCAS/AACOMAS)
-            </label>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-sm font-medium text-gray-300">
+                15 Activities (AMCAS/AACOMAS)
+              </label>
+              <div className="flex gap-2">
+                <input
+                  ref={activitiesFileInputRef}
+                  type="file"
+                  accept=".pdf,.docx,.txt"
+                  onChange={handleActivitiesFileUpload}
+                  className="hidden"
+                />
+                <button
+                  onClick={() => activitiesFileInputRef.current?.click()}
+                  disabled={isUploadingActivities}
+                  className="text-xs px-3 py-1 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-white transition-colors"
+                >
+                  {isUploadingActivities ? 'Uploading...' : '📄 Upload File'}
+                </button>
+              </div>
+            </div>
             <textarea
               value={activities}
               onChange={(e) => setActivities(e.target.value)}

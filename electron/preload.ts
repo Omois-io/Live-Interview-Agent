@@ -45,6 +45,11 @@ export interface ElectronAPI {
   setWindowOpacity: (opacity: number) => Promise<boolean>;
   setClickThrough: (enable: boolean) => Promise<boolean>;
 
+  // Logging
+  writeLog: (level: string, message: string, data?: any) => Promise<boolean>;
+  getLogPath: () => Promise<string>;
+  clearLog: () => Promise<boolean>;
+
   // Platform info
   platform: string;
 }
@@ -81,6 +86,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setAlwaysOnTop: (value: boolean) => ipcRenderer.invoke('set-always-on-top', value),
   setWindowOpacity: (opacity: number) => ipcRenderer.invoke('set-window-opacity', opacity),
   setClickThrough: (enable: boolean) => ipcRenderer.invoke('set-click-through', enable),
+
+  // Logging
+  writeLog: (level: string, message: string, data?: any) => ipcRenderer.invoke('write-log', level, message, data),
+  getLogPath: () => ipcRenderer.invoke('get-log-path'),
+  clearLog: () => ipcRenderer.invoke('clear-log'),
 
   // Platform info
   platform: process.platform

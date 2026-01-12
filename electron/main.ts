@@ -4,13 +4,31 @@ import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 
-// Get recordings directory
+// Get recordings directories
 const getRecordingsPath = () => path.join(app.getPath('userData'), 'recordings');
+const getAudioRecordingsPath = () => path.join(app.getPath('userData'), 'saved_audio');
+const getVideoRecordingsPath = () => path.join(app.getPath('userData'), 'saved_video');
 const getArtifactsPath = () => path.join(app.getPath('userData'), 'artifacts');
+const getLogPath = () => path.join(app.getPath('userData'), 'app.log');
+
+// Logger function
+function writeLog(level: string, message: string, data?: any): void {
+  const timestamp = new Date().toISOString();
+  const logLine = `[${timestamp}] [${level}] ${message}${data ? ' ' + JSON.stringify(data) : ''}\n`;
+
+  try {
+    fs.appendFileSync(getLogPath(), logLine);
+  } catch (e) {
+    console.error('Failed to write log:', e);
+  }
+
+  // Also log to console
+  console.log(logLine.trim());
+}
 
 // Ensure directories exist
 function ensureDirectories(): void {
-  const dirs = [getRecordingsPath(), getArtifactsPath()];
+  const dirs = [getRecordingsPath(), getAudioRecordingsPath(), getVideoRecordingsPath(), getArtifactsPath()];
   for (const dir of dirs) {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
@@ -225,6 +243,24 @@ ipcMain.handle('get-platform', () => {
   return process.platform;
 });
 
+ipcMain.handle('write-log', (_event, level: string, message: string, data?: any) => {
+  writeLog(level, message, data);
+  return true;
+});
+
+ipcMain.handle('get-log-path', () => {
+  return getLogPath();
+});
+
+ipcMain.handle('clear-log', () => {
+  try {
+    fs.writeFileSync(getLogPath(), '');
+    return true;
+  } catch (e) {
+    return false;
+  }
+});
+
 ipcMain.handle('set-always-on-top', (_event, value: boolean) => {
   if (mainWindow) {
     mainWindow.setAlwaysOnTop(value);
@@ -259,9 +295,20 @@ ipcMain.handle('save-recording', async (_event, options: {
   ensureDirectories();
 
   const { data, filename, directory, metadata } = options;
-  const targetDir = directory === 'artifacts'
-    ? getArtifactsPath()
-    : getRecordingsPath();
+  let targetDir: string;
+  switch (directory) {
+    case 'artifacts':
+      targetDir = getArtifactsPath();
+      break;
+    case 'saved_audio':
+      targetDir = getAudioRecordingsPath();
+      break;
+    case 'saved_video':
+      targetDir = getVideoRecordingsPath();
+      break;
+    default:
+      targetDir = getRecordingsPath();
+  }
 
   const filePath = path.join(targetDir, filename);
 

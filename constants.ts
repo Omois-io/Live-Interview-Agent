@@ -14,6 +14,7 @@ export const LIVE_MODELS = [
   { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash Exp' }
 ];
 
+// Default to native audio model (requires AUDIO output modality)
 export const MODEL_NAME = 'gemini-2.5-flash-native-audio-preview-12-2025';
 
 // Embedding and parsing model configuration
