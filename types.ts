@@ -45,3 +45,18 @@ export interface TokenStats {
   totalTokens: number;
   estimatedCost: number;
 }
+
+export interface InstructionPreset {
+  id: string;
+  title: string;
+  instructions: string;
+  createdAt: number;
+}
+
+export interface SuggestionItem {
+  id: string;
+  type: 'match' | 'ai';
+  question: string;
+  answer: string;
+  timestamp: number;
+}

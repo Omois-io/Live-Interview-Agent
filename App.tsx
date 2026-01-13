@@ -12,8 +12,9 @@ import { ContextModal } from './components/ContextModal';
 import { RecordingPanel } from './components/RecordingPanel';
 import { LiveAnswerPanel } from './components/LiveAnswerPanel';
 import { TabbedSidebar } from './components/TabbedSidebar';
+import { getStoredPresets } from './components/GuideTab';
 import { ParsedActivity } from './services/activityParserService';
-import { DEFAULT_SYSTEM_PROMPT, renderPrompt } from './services/promptUtils';
+import { PROMPT_INTRO, DEFAULT_ANSWERING_INSTRUCTIONS, PROMPT_CRITICAL, renderPrompt } from './services/promptUtils';
 import { logger } from './services/logger';
 
 // Pricing Constants for Gemini 2.5 Flash Native Audio (Live API)
@@ -45,6 +46,27 @@ interface SuggestionItem {
   timestamp: number;
 }
 
+// LocalStorage helpers for Q&A persistence
+const SUGGESTIONS_STORAGE_KEY = 'interview_hud_suggestions';
+
+const saveSuggestionsToStorage = (items: SuggestionItem[]) => {
+  try {
+    localStorage.setItem(SUGGESTIONS_STORAGE_KEY, JSON.stringify(items));
+  } catch (err) {
+    logger.error('Failed to save suggestions:', err);
+  }
+};
+
+const loadSuggestionsFromStorage = (): SuggestionItem[] => {
+  try {
+    const stored = localStorage.getItem(SUGGESTIONS_STORAGE_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch (err) {
+    logger.error('Failed to load suggestions:', err);
+    return [];
+  }
+};
+
 interface AudioSourceItem {
   id: string;
   name: string;
@@ -75,10 +97,6 @@ export default function App() {
   const [systemAudioSources, setSystemAudioSources] = useState<AudioSourceItem[]>([]);
   const [selectedSystemSource, setSelectedSystemSource] = useState<string>('');
 
-  // Prompt State
-  const [promptTemplate, setPromptTemplate] = useState(DEFAULT_SYSTEM_PROMPT);
-  const [isPromptSettingsOpen, setIsPromptSettingsOpen] = useState(false);
-
   // HUD State
   const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null);
 
@@ -107,6 +125,12 @@ export default function App() {
   const [isEditing, setIsEditing] = useState(false);
   const [currentEdit, setCurrentEdit] = useState<Partial<InterviewQA>>({});
 
+  // Interview mode preset
+  const [activePresetId, setActivePresetId] = useState<string | null>(() => {
+    const saved = localStorage.getItem('interview_hud_active_preset');
+    return saved || null;
+  });
+
   // Streaming answer state
   const [streamingAnswer, setStreamingAnswer] = useState<string>('');
   const [isStreaming, setIsStreaming] = useState(false);
@@ -127,13 +151,8 @@ export default function App() {
   // Layout State
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
-  // Draggable Card State
-  const [cardPosition, setCardPosition] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStartRef = useRef({ x: 0, y: 0 });
-  const initialCardPosRef = useRef({ x: 0, y: 0 });
-  const suggestionsEndRef = useRef<HTMLDivElement>(null);
-  const lastSuggestionRef = useRef<HTMLDivElement>(null);
+  // Suggestion refs for scrolling
+  const suggestionRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   const geminiServiceRef = useRef<GeminiLiveService | null>(null);
   const embeddingServiceRef = useRef<EmbeddingService | null>(null);
@@ -226,6 +245,13 @@ export default function App() {
       } catch (err) {
         logger.error('Failed to load knowledge items:', err);
       }
+
+      // Load cached Q&A suggestions
+      const savedSuggestions = loadSuggestionsFromStorage();
+      if (savedSuggestions.length > 0) {
+        setSuggestions(savedSuggestions);
+        logger.info(`Loaded ${savedSuggestions.length} Q&A suggestions from cache`);
+      }
     };
 
     initializeKnowledge();
@@ -235,6 +261,22 @@ export default function App() {
   useEffect(() => {
     knowledgeItemsRef.current = knowledgeItems;
   }, [knowledgeItems]);
+
+  // Save suggestions to localStorage when they change
+  useEffect(() => {
+    if (suggestions.length > 0) {
+      saveSuggestionsToStorage(suggestions);
+    }
+  }, [suggestions]);
+
+  // Save active preset to localStorage when it changes
+  useEffect(() => {
+    if (activePresetId) {
+      localStorage.setItem('interview_hud_active_preset', activePresetId);
+    } else {
+      localStorage.removeItem('interview_hud_active_preset');
+    }
+  }, [activePresetId]);
 
   // Fetch Audio Devices (Mic)
   useEffect(() => {
@@ -386,43 +428,19 @@ export default function App() {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [transcriptHistory, currentTranscript]);
 
-  // Auto-scroll suggestions - scroll to beginning of new answer
-  useEffect(() => {
-    if (lastSuggestionRef.current) {
-      lastSuggestionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-  }, [suggestions]);
+  // Scroll to a specific suggestion by index
+  const scrollToSuggestion = (index: number) => {
+    suggestionRefs.current[index]?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start'
+    });
+  };
 
-  // Drag Event Handlers
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isDragging) return;
-      const dx = e.clientX - dragStartRef.current.x;
-      const dy = e.clientY - dragStartRef.current.y;
-      setCardPosition({
-        x: initialCardPosRef.current.x + dx,
-        y: initialCardPosRef.current.y + dy
-      });
-    };
-
-    const handleMouseUp = () => {
-      setIsDragging(false);
-    };
-
-    if (isDragging) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
-    }
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isDragging]);
-
-  const handleDragStart = (e: React.MouseEvent) => {
-    setIsDragging(true);
-    dragStartRef.current = { x: e.clientX, y: e.clientY };
-    initialCardPosRef.current = { ...cardPosition };
+  // Clear all Q&A history
+  const clearHistory = () => {
+    setSuggestions([]);
+    localStorage.removeItem(SUGGESTIONS_STORAGE_KEY);
+    logger.info('Cleared Q&A history');
   };
 
   // Start session (works for both Electron and Web)
@@ -591,9 +609,9 @@ export default function App() {
     setConnectionState(isReconnect ? ConnectionState.RECONNECTING : ConnectionState.CONNECTING);
 
     // Only clear state on fresh connection, not on reconnect
+    // Note: suggestions are NOT cleared - they persist across sessions for Q&A history recall
     if (!isReconnect) {
       setTranscriptHistory([]);
-      setSuggestions([]);
       setCurrentTranscript('');
       setActiveQuestionId(null);
       setTokenStats({ inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCost: 0 });
@@ -606,9 +624,25 @@ export default function App() {
 
     geminiServiceRef.current = new GeminiLiveService(apiKey);
 
-    const systemInstruction = renderPrompt(promptTemplate, {
-      company: company || 'General',
-    });
+    // Build system instruction with preset override capability
+    let answeringInstructions = DEFAULT_ANSWERING_INSTRUCTIONS;
+
+    // If preset is active, REPLACE default answering instructions (not append)
+    if (activePresetId) {
+      const presets = getStoredPresets();
+      const activePreset = presets.find(p => p.id === activePresetId);
+      if (activePreset) {
+        answeringInstructions = `
+
+WHEN ANSWERING (${activePreset.title}):
+${activePreset.instructions}`;
+        logger.info(`Using preset answering instructions: ${activePreset.title}`);
+      }
+    }
+
+    const systemInstruction = renderPrompt(PROMPT_INTRO, { company: company || 'General' })
+      + answeringInstructions
+      + PROMPT_CRITICAL;
 
     // Initialize embedding service for semantic matching
     if (!embeddingServiceRef.current) {
@@ -1071,107 +1105,6 @@ export default function App() {
         </div>
       </header>
 
-      {/* Floating Answer Window (Draggable, Persistent) */}
-      {(suggestions.length > 0 || isStreaming) && (
-        <div className="absolute inset-0 z-40 flex items-center justify-center pointer-events-none overflow-hidden">
-          <div
-            className="w-full max-w-3xl pointer-events-auto flex flex-col animate-in fade-in zoom-in duration-300 backdrop-blur-xl border border-gray-700/50 rounded-2xl shadow-2xl relative overflow-hidden"
-            style={{
-              transform: `translate(${cardPosition.x}px, ${cardPosition.y}px)`,
-              maxHeight: '60vh',
-              backgroundColor: `rgba(0, 0, 0, ${transparency})`
-            }}
-          >
-            {/* Window Header (Drag Handle) */}
-            <div
-              className="bg-gray-800/80 p-2 cursor-move flex items-center justify-between border-b border-gray-700 select-none"
-              onMouseDown={handleDragStart}
-            >
-              <div className="flex items-center gap-2 px-2">
-                <span className="text-xs font-bold text-gray-300 uppercase tracking-widest">Interview Assistant</span>
-                <span className="text-[10px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full">{suggestions.length}</span>
-              </div>
-              <div className="flex gap-1.5 px-2">
-                <div className="w-2 h-2 rounded-full bg-red-500/50"></div>
-                <div className="w-2 h-2 rounded-full bg-yellow-500/50"></div>
-                <div className="w-2 h-2 rounded-full bg-green-500/50"></div>
-              </div>
-            </div>
-
-            {/* Window Body (Scrollable Suggestions) */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
-              {suggestions.map((item, index) => {
-                const isLast = index === suggestions.length - 1;
-
-                return (
-                  <div
-                    key={item.id}
-                    ref={isLast ? lastSuggestionRef : null}
-                    className={`relative pl-4 ${isLast ? 'opacity-100' : 'opacity-60 hover:opacity-100 transition-opacity'}`}
-                  >
-                    {/* Left Line Marker */}
-                    <div className={`absolute top-0 left-0 w-1 h-full rounded-full bg-gradient-to-b ${item.type === 'match' ? 'from-blue-500 to-blue-900' : 'from-purple-500 to-purple-900'}`}></div>
-
-                    <div className="mb-4">
-                      <div className="flex justify-between items-center mb-1">
-                        <span className={`${item.type === 'match' ? 'text-blue-400' : 'text-purple-400'} text-xs font-bold uppercase tracking-wider`}>
-                          {item.type === 'match' ? 'Interviewer Asked' : 'Detected Question'}
-                        </span>
-                        {isLast && <span className="text-[10px] bg-gray-700 text-white px-2 py-0.5 rounded animate-pulse">Live</span>}
-                      </div>
-                      <h2 className="text-xl font-bold text-white leading-tight">
-                        {item.question}
-                      </h2>
-                    </div>
-
-                    <div>
-                      <span className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-2 block">
-                        {item.type === 'match' ? 'Knowledge Base Answer' : 'Suggested Response'}
-                      </span>
-                      <div className="text-lg text-gray-100 leading-relaxed font-light tracking-wide whitespace-pre-wrap">
-                        {item.answer}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {/* Streaming Answer Display */}
-              {isStreaming && (
-                <div className="relative pl-4">
-                  {/* Left Line Marker */}
-                  <div className="absolute top-0 left-0 w-1 h-full rounded-full bg-gradient-to-b from-green-500 to-green-900 animate-pulse"></div>
-
-                  <div className="mb-4">
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="text-green-400 text-xs font-bold uppercase tracking-wider">
-                        Generating Answer
-                      </span>
-                      <span className="text-[10px] bg-green-700 text-white px-2 py-0.5 rounded animate-pulse">Streaming...</span>
-                    </div>
-                    <h2 className="text-xl font-bold text-white leading-tight">
-                      {streamingQuestion}
-                    </h2>
-                  </div>
-
-                  <div>
-                    <span className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-2 block">
-                      AI Response
-                    </span>
-                    <div className="text-lg text-gray-100 leading-relaxed font-light tracking-wide whitespace-pre-wrap">
-                      {streamingAnswer}
-                      <span className="inline-block w-2 h-5 bg-green-400 ml-1 animate-pulse"></span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div ref={suggestionsEndRef} />
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Content Columns */}
       <div className="flex flex-1 overflow-hidden relative">
 
@@ -1187,6 +1120,7 @@ export default function App() {
             questions={questions}
             activeQuestionId={activeQuestionId}
             parsedActivities={parsedActivities}
+            knowledgeItems={knowledgeItems}
             transcriptHistory={transcriptHistory}
             currentTranscript={currentTranscript}
             selectedModel={selectedModel}
@@ -1220,6 +1154,8 @@ export default function App() {
             onOpenContextModal={() => setShowContextModal(true)}
             onSchoolChange={setCompany}
             onRefreshEmbeddings={refreshEmbeddings}
+            activePresetId={activePresetId}
+            onTogglePreset={(id) => setActivePresetId(prev => prev === id ? null : id)}
             liveModels={LIVE_MODELS}
             isElectron={isElectron}
             platform={window.electronAPI?.platform}
@@ -1229,8 +1165,8 @@ export default function App() {
 
         {/* Right: Main content area - Live Answer Panel or status */}
         <div className="flex-1 p-4 flex flex-col relative overflow-hidden">
-          {/* Live Answer Panel Mode */}
-          {showLiveAnswerPanel && (isStreaming || streamingQuestion) ? (
+          {/* Live Answer Panel Mode - Show when connected and panel enabled */}
+          {showLiveAnswerPanel && connectionState === ConnectionState.CONNECTED ? (
             <LiveAnswerPanel
               question={streamingQuestion}
               streamingAnswer={streamingAnswer}
@@ -1243,6 +1179,10 @@ export default function App() {
                   ? questions.find(q => q.id === qaMatches[0].id)?.answer
                   : undefined
               }
+              suggestions={suggestions}
+              onScrollToSuggestion={scrollToSuggestion}
+              onClearHistory={clearHistory}
+              suggestionRefs={suggestionRefs}
             />
           ) : (
             /* Status indicators when not showing Live Answer Panel */

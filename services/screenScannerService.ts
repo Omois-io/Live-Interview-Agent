@@ -94,19 +94,47 @@ export class ScreenScannerService {
   }
 
   /**
-   * Capture screenshot using getDisplayMedia
+   * Capture screenshot using appropriate method for environment
    */
   private async captureScreen(): Promise<string | null> {
     let stream: MediaStream | null = null;
 
     try {
-      // Request screen capture (will use existing screen share if available)
-      stream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
+      const isElectron = !!(window as any).electronAPI;
+
+      if (isElectron) {
+        // Electron: Use chromeMediaSource approach (getDisplayMedia not supported)
+        const sources = await (window as any).electronAPI.getAudioSources();
+        const entireScreen = sources.find((s: any) =>
+          s.name.toLowerCase().includes('entire screen')
+        ) || sources[0];
+
+        if (!entireScreen) {
+          throw new Error('No screen source available');
         }
-      });
+
+        logger.info(`Capturing screen from source: ${entireScreen.name}`);
+
+        stream = await (navigator.mediaDevices as any).getUserMedia({
+          audio: false,
+          video: {
+            mandatory: {
+              chromeMediaSource: 'desktop',
+              chromeMediaSourceId: entireScreen.id,
+              maxWidth: 1920,
+              maxHeight: 1080
+            }
+          }
+        });
+      } else {
+        // Web: Use standard getDisplayMedia
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+          }
+        });
+      }
 
       // Create video element to capture frame
       const video = document.createElement('video');

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { EmbeddedChunk, EmbeddingMatch } from '../services/embeddingService';
-import { KnowledgeItem } from '../types';
+import { KnowledgeItem, SuggestionItem } from '../types';
 
 interface LiveAnswerPanelProps {
   // Current question being answered
@@ -19,6 +19,14 @@ interface LiveAnswerPanelProps {
   presetAnswer?: string;
   // Callback when user wants to use a different chunk
   onUseChunk?: (chunk: EmbeddedChunk) => void;
+  // Q&A history (past suggestions)
+  suggestions?: SuggestionItem[];
+  // Callback to scroll to a specific suggestion
+  onScrollToSuggestion?: (index: number) => void;
+  // Callback to clear all history
+  onClearHistory?: () => void;
+  // Refs for suggestion elements (for scrolling)
+  suggestionRefs?: React.MutableRefObject<(HTMLDivElement | null)[]>;
 }
 
 export function LiveAnswerPanel({
@@ -30,6 +38,10 @@ export function LiveAnswerPanel({
   ragChunks = [],
   presetAnswer,
   onUseChunk,
+  suggestions = [],
+  onScrollToSuggestion,
+  onClearHistory,
+  suggestionRefs,
 }: LiveAnswerPanelProps) {
   const [showChunks, setShowChunks] = useState(false);  // Hide left panel by default
   const [selectedChunkId, setSelectedChunkId] = useState<string | null>(null);
@@ -88,14 +100,42 @@ export function LiveAnswerPanel({
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700/50 bg-gray-800/50">
         <div className="flex items-center gap-2">
           <div className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-green-500 animate-pulse' : 'bg-gray-500'}`} />
-          <h2 className="text-sm font-bold text-white uppercase tracking-wider">Live Answer Assistant</h2>
+          <h2 className="text-sm font-bold text-white uppercase tracking-wider">Interview Assistant</h2>
+          {suggestions.length > 0 && (
+            <span className="text-[10px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full">{suggestions.length}</span>
+          )}
         </div>
-        <button
-          onClick={() => setShowChunks(!showChunks)}
-          className="text-xs text-gray-400 hover:text-white transition-colors"
-        >
-          {showChunks ? 'Hide Context' : 'Show Context'}
-        </button>
+
+        {/* Q&A History Quick-Access Buttons */}
+        <div className="flex items-center gap-2">
+          {suggestions.length > 0 && (
+            <div className="flex items-center gap-1">
+              {suggestions.map((_, index) => (
+                <button
+                  key={index}
+                  onClick={() => onScrollToSuggestion?.(index)}
+                  className="w-5 h-5 text-[10px] font-bold bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded transition-colors"
+                  title={`Go to Q${index + 1}`}
+                >
+                  {index + 1}
+                </button>
+              ))}
+              <button
+                onClick={() => onClearHistory?.()}
+                className="ml-1 px-2 py-0.5 text-[10px] font-bold text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded transition-colors"
+                title="Clear all Q&A history"
+              >
+                Clear
+              </button>
+            </div>
+          )}
+          <button
+            onClick={() => setShowChunks(!showChunks)}
+            className="text-xs text-gray-400 hover:text-white transition-colors"
+          >
+            {showChunks ? 'Hide Context' : 'Show Context'}
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
@@ -268,6 +308,45 @@ export function LiveAnswerPanel({
                 <p className="text-sm text-gray-600">
                   The AI will generate an answer based on the detected question and your context.
                 </p>
+              </div>
+            )}
+
+            {/* Past Q&A History */}
+            {suggestions.length > 0 && (
+              <div className="mt-6 pt-4 border-t border-gray-700/50">
+                <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-3">
+                  Previous Questions ({suggestions.length})
+                </h4>
+                <div className="space-y-4">
+                  {suggestions.map((item, index) => (
+                    <div
+                      key={item.id}
+                      ref={(el) => {
+                        if (suggestionRefs) {
+                          suggestionRefs.current[index] = el;
+                        }
+                      }}
+                      className="relative pl-3 py-2 border-l-2 border-gray-600 hover:border-blue-500 transition-colors"
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-[10px] font-bold bg-gray-700 text-gray-300 w-5 h-5 rounded flex items-center justify-center">
+                          {index + 1}
+                        </span>
+                        <span className={`text-[10px] font-bold uppercase tracking-wider ${
+                          item.type === 'match' ? 'text-blue-400' : 'text-purple-400'
+                        }`}>
+                          {item.type === 'match' ? 'Knowledge Match' : 'AI Generated'}
+                        </span>
+                      </div>
+                      <h5 className="text-sm font-medium text-white mb-1 leading-snug">
+                        {item.question}
+                      </h5>
+                      <p className="text-xs text-gray-400 leading-relaxed line-clamp-3">
+                        {item.answer}
+                      </p>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>

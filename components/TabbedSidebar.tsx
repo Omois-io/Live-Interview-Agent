@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { InterviewQA, ConnectionState } from '../types';
+import { InterviewQA, ConnectionState, KnowledgeItem } from '../types';
 import { contextService } from '../services/contextService';
 import { artifactService, Artifact, SchoolInfo } from '../services/artifactService';
 import { ParsedActivity } from '../services/activityParserService';
 import { QuestionList } from './QuestionList';
 import { RecordingPanel } from './RecordingPanel';
+import { GuideTab } from './GuideTab';
 
-type TabId = 'prep' | 'live' | 'artifacts';
+type TabId = 'prep' | 'live' | 'guide' | 'artifacts';
 
 interface FoldableSectionProps {
   title: string;
@@ -55,6 +56,7 @@ interface TabbedSidebarProps {
   questions: InterviewQA[];
   activeQuestionId: string | null;
   parsedActivities: ParsedActivity[];
+  knowledgeItems: KnowledgeItem[];
   transcriptHistory: Array<{ id: string; text: string; speaker: string; timestamp: number }>;
   currentTranscript: string;
 
@@ -86,6 +88,8 @@ interface TabbedSidebarProps {
   onOpenContextModal: () => void;
   onSchoolChange: (school: string) => void;
   onRefreshEmbeddings: () => void;
+  activePresetId: string | null;
+  onTogglePreset: (id: string) => void;
 
   // Models list
   liveModels: Array<{ id: string; name: string }>;
@@ -99,6 +103,7 @@ export function TabbedSidebar({
   questions,
   activeQuestionId,
   parsedActivities,
+  knowledgeItems,
   transcriptHistory,
   currentTranscript,
   selectedModel,
@@ -124,6 +129,8 @@ export function TabbedSidebar({
   onOpenContextModal,
   onSchoolChange,
   onRefreshEmbeddings,
+  activePresetId,
+  onTogglePreset,
   liveModels,
   isElectron,
   platform,
@@ -135,6 +142,7 @@ export function TabbedSidebar({
     readiness: true,
     school: true,
     cv: false,
+    knowledge: false,
     activities: true,
     qa: true,
     audio: true,
@@ -172,6 +180,15 @@ export function TabbedSidebar({
           <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
           <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
           <line x1="12" x2="12" y1="19" y2="22" />
+        </svg>
+      ),
+    },
+    {
+      id: 'guide',
+      label: 'Guide',
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
         </svg>
       ),
     },
@@ -317,6 +334,38 @@ export function TabbedSidebar({
                 <div className="mt-2 p-2 bg-gray-900 rounded text-xs text-gray-400 max-h-32 overflow-y-auto">
                   {cv.slice(0, 300)}...
                 </div>
+              )}
+            </FoldableSection>
+
+            {/* Knowledge Chunks (from uploaded documents) */}
+            <FoldableSection
+              title="Knowledge Chunks"
+              isOpen={sections.knowledge}
+              onToggle={() => toggleSection('knowledge')}
+              badge={knowledgeItems.length}
+              badgeColor={knowledgeItems.length > 0 ? 'bg-green-600' : 'bg-gray-700'}
+            >
+              {knowledgeItems.length > 0 ? (
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {knowledgeItems.map((item) => (
+                    <div key={item.id} className="p-2 bg-gray-900 rounded border border-gray-700">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs font-medium text-blue-400 truncate">{item.title}</span>
+                        <span className="text-[9px] px-1 py-0.5 rounded bg-gray-700 text-gray-300">
+                          {item.metadata.type}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-gray-400 line-clamp-2">{item.content}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <button
+                  onClick={onOpenContextModal}
+                  className="w-full py-2 bg-gray-800 hover:bg-gray-700 text-white rounded text-sm transition-colors"
+                >
+                  Upload Documents
+                </button>
               )}
             </FoldableSection>
 
@@ -539,6 +588,14 @@ export function TabbedSidebar({
               </div>
             </FoldableSection>
           </div>
+        )}
+
+        {/* GUIDE TAB */}
+        {activeTab === 'guide' && (
+          <GuideTab
+            activePresetId={activePresetId}
+            onTogglePreset={onTogglePreset}
+          />
         )}
 
         {/* ARTIFACTS TAB */}

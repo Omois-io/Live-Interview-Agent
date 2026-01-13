@@ -173,9 +173,11 @@ function stopSystemAudioCapture(): void {
 }
 
 function createWindow(): void {
+  writeLog('INFO', 'Creating window...');
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  writeLog('INFO', `Screen size: ${width}x${height}`);
 
-  mainWindow = new BrowserWindow({
+  const windowConfig = {
     width: 600,
     height: 800,
     x: width - 620,
@@ -193,20 +195,52 @@ function createWindow(): void {
       nodeIntegration: false,
       sandbox: false
     }
-  });
+  };
+  writeLog('INFO', 'Window config', windowConfig);
+
+  mainWindow = new BrowserWindow(windowConfig);
+  writeLog('INFO', 'BrowserWindow created');
 
   // Allow clicking through fully transparent regions
   mainWindow.setIgnoreMouseEvents(false);
 
+  // Show window when content is ready (important for transparent windows)
+  mainWindow.once('ready-to-show', () => {
+    writeLog('INFO', 'ready-to-show event fired');
+    mainWindow?.show();
+    writeLog('INFO', 'Window shown');
+  });
+
+  // Log when content finishes loading
+  mainWindow.webContents.on('did-finish-load', () => {
+    writeLog('INFO', 'did-finish-load - content loaded');
+  });
+
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    writeLog('ERROR', `did-fail-load: ${errorCode} - ${errorDescription}`);
+  });
+
+  // Capture renderer console logs to file
+  mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+    const levelStr = ['DEBUG', 'INFO', 'WARN', 'ERROR'][level] || 'LOG';
+    writeLog(levelStr, `[RENDERER] ${message}`, { line, sourceId });
+  });
+
   // Load the app
   if (process.env.VITE_DEV_SERVER_URL) {
+    writeLog('INFO', 'Loading dev server URL: ' + process.env.VITE_DEV_SERVER_URL);
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'));
+    const htmlPath = path.join(__dirname, '../../dist/index.html');
+    writeLog('INFO', 'Loading production HTML: ' + htmlPath);
+    mainWindow.loadFile(htmlPath);
+    // FORCE DevTools open in production for debugging
+    mainWindow.webContents.openDevTools({ mode: 'detach' });
   }
 
   mainWindow.on('closed', () => {
+    writeLog('INFO', 'Window closed');
     mainWindow = null;
     stopSystemAudioCapture();
   });
