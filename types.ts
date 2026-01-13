@@ -11,7 +11,7 @@ export interface KnowledgeItem {
   title: string;
   content: string;
   metadata: {
-    type: 'experience' | 'activity' | 'education' | 'other';
+    type: 'experience' | 'activity' | 'education' | 'qa' | 'other';
     date?: string;
     skills?: string[];
   };
@@ -57,6 +57,7 @@ export interface SuggestionItem {
   id: string;
   type: 'match' | 'ai';
   question: string;
-  answer: string;
+  liveAnswer: string;       // Fast streaming answer
+  thoroughAnswer?: string;  // Thorough answer (Gemini 3 Pro / Claude Opus)
   timestamp: number;
 }

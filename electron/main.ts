@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, screen, desktopCapturer, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, screen, desktopCapturer, dialog, session } from 'electron';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { execSync } from 'child_process';
 import path from 'path';
@@ -200,6 +200,19 @@ function createWindow(): void {
 
   mainWindow = new BrowserWindow(windowConfig);
   writeLog('INFO', 'BrowserWindow created');
+
+  // Enable getDisplayMedia by setting up the display media request handler
+  // This allows the renderer to use navigator.mediaDevices.getDisplayMedia()
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    desktopCapturer.getSources({ types: ['screen', 'window'] }).then((sources) => {
+      // Show native picker by not pre-selecting a source
+      // The callback with video/audio constraints allows the picker to appear
+      callback({ video: sources[0], audio: 'loopback' });
+    }).catch((error) => {
+      writeLog('ERROR', 'Failed to get sources for display media:', error);
+      callback({});
+    });
+  });
 
   // Allow clicking through fully transparent regions
   mainWindow.setIgnoreMouseEvents(false);

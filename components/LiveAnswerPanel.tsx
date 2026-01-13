@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { EmbeddedChunk, EmbeddingMatch } from '../services/embeddingService';
 import { KnowledgeItem, SuggestionItem } from '../types';
+import { ThoroughModel } from '../services/thoroughAnswerService';
 
 interface LiveAnswerPanelProps {
   // Current question being answered
@@ -27,6 +28,14 @@ interface LiveAnswerPanelProps {
   onClearHistory?: () => void;
   // Refs for suggestion elements (for scrolling)
   suggestionRefs?: React.MutableRefObject<(HTMLDivElement | null)[]>;
+  // Thorough answer (from better model)
+  thoroughAnswer?: string;
+  // Whether thorough answer is being generated
+  isThoroughGenerating?: boolean;
+  // Model used for thorough answer
+  thoroughModel?: ThoroughModel;
+  // Error from thorough answer generation
+  thoroughError?: string | null;
 }
 
 export function LiveAnswerPanel({
@@ -42,11 +51,21 @@ export function LiveAnswerPanel({
   onScrollToSuggestion,
   onClearHistory,
   suggestionRefs,
+  thoroughAnswer = '',
+  isThoroughGenerating = false,
+  thoroughModel,
+  thoroughError,
 }: LiveAnswerPanelProps) {
   const [showChunks, setShowChunks] = useState(false);  // Hide left panel by default
   const [selectedChunkId, setSelectedChunkId] = useState<string | null>(null);
   const [expandedChunkIndex, setExpandedChunkIndex] = useState<number | null>(null);
   const answerEndRef = useRef<HTMLDivElement>(null);
+
+  // Toggle between Live and Thorough views
+  const [currentAnswerView, setCurrentAnswerView] = useState<'live' | 'thorough'>('live');
+
+  // Which history item is being viewed (null = current/live question)
+  const [selectedHistoryIndex, setSelectedHistoryIndex] = useState<number | null>(null);
 
   // Auto-scroll to bottom of streaming answer
   useEffect(() => {
@@ -110,12 +129,28 @@ export function LiveAnswerPanel({
         <div className="flex items-center gap-2">
           {suggestions.length > 0 && (
             <div className="flex items-center gap-1">
-              {suggestions.map((_, index) => (
+              {/* Current/Live button */}
+              <button
+                onClick={() => setSelectedHistoryIndex(null)}
+                className={`px-2 h-5 text-[10px] font-bold rounded transition-colors ${
+                  selectedHistoryIndex === null
+                    ? 'bg-green-600 text-white'
+                    : 'bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white'
+                }`}
+                title="Current question"
+              >
+                Live
+              </button>
+              {suggestions.map((item, index) => (
                 <button
                   key={index}
-                  onClick={() => onScrollToSuggestion?.(index)}
-                  className="w-5 h-5 text-[10px] font-bold bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded transition-colors"
-                  title={`Go to Q${index + 1}`}
+                  onClick={() => setSelectedHistoryIndex(selectedHistoryIndex === index ? null : index)}
+                  className={`w-5 h-5 text-[10px] font-bold rounded transition-colors ${
+                    selectedHistoryIndex === index
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white'
+                  }`}
+                  title={`Q${index + 1}${item.thoroughAnswer ? ' (has thorough)' : ''}`}
                 >
                   {index + 1}
                 </button>
@@ -125,7 +160,7 @@ export function LiveAnswerPanel({
                 className="ml-1 px-2 py-0.5 text-[10px] font-bold text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded transition-colors"
                 title="Clear all Q&A history"
               >
-                Clear
+                ×
               </button>
             </div>
           )}
@@ -210,12 +245,18 @@ export function LiveAnswerPanel({
         {/* Main Answer Panel */}
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Question Display */}
-          <div className="px-4 py-3 border-b border-gray-700/50 bg-gradient-to-r from-blue-500/10 to-transparent">
+          <div className={`px-4 py-3 border-b border-gray-700/50 ${
+            selectedHistoryIndex !== null
+              ? 'bg-gradient-to-r from-blue-600/20 to-transparent'
+              : 'bg-gradient-to-r from-blue-500/10 to-transparent'
+          }`}>
             <span className="text-[10px] font-bold text-blue-400 uppercase tracking-widest block mb-1">
-              Detected Question
+              {selectedHistoryIndex !== null ? `Question ${selectedHistoryIndex + 1}` : 'Detected Question'}
             </span>
             <h2 className="text-lg font-bold text-white leading-snug">
-              {question || 'Listening for question...'}
+              {selectedHistoryIndex !== null && suggestions[selectedHistoryIndex]
+                ? suggestions[selectedHistoryIndex].question
+                : (question || 'Listening for question...')}
             </h2>
           </div>
 
@@ -263,92 +304,120 @@ export function LiveAnswerPanel({
               </div>
             )}
 
-            {presetAnswer ? (
-              // Show preset answer with highlight
-              <div className="space-y-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-[10px] font-bold text-yellow-400 uppercase tracking-widest">
-                    Knowledge Base Match
-                  </span>
-                  <span className="text-[9px] bg-yellow-500/20 text-yellow-300 px-1.5 py-0.5 rounded">
-                    Preset Answer
-                  </span>
-                </div>
-                <div className="text-base text-gray-100 leading-relaxed font-light whitespace-pre-wrap">
-                  {presetAnswer}
-                </div>
-              </div>
-            ) : streamingAnswer ? (
-              // Show streaming answer
-              <div className="space-y-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-[10px] font-bold text-green-400 uppercase tracking-widest">
-                    Generated Response
-                  </span>
-                  {isStreaming && (
-                    <span className="text-[9px] bg-green-500/20 text-green-300 px-1.5 py-0.5 rounded animate-pulse">
-                      Streaming...
-                    </span>
-                  )}
-                </div>
-                <div className="text-base text-gray-100 leading-relaxed font-light whitespace-pre-wrap">
-                  {streamingAnswer}
-                  {isStreaming && (
-                    <span className="inline-block w-2 h-4 bg-green-400 ml-1 animate-pulse" />
-                  )}
-                </div>
-                <div ref={answerEndRef} />
-              </div>
-            ) : (
-              // Waiting state
-              <div className="flex-1 flex flex-col items-center justify-center text-gray-500">
-                <div className="text-lg font-medium mb-2">
-                  {isStreaming ? 'Generating answer...' : 'Waiting for response...'}
-                </div>
-                <p className="text-sm text-gray-600">
-                  The AI will generate an answer based on the detected question and your context.
-                </p>
-              </div>
-            )}
+            {/* Answer Toggle Buttons */}
+            {(() => {
+              // Determine what data to show based on selection
+              const selectedItem = selectedHistoryIndex !== null ? suggestions[selectedHistoryIndex] : null;
+              const showLiveAnswer = selectedItem
+                ? (selectedItem.liveAnswer || (selectedItem as any).answer || '')
+                : (presetAnswer || streamingAnswer);
+              const showThoroughAnswer = selectedItem ? selectedItem.thoroughAnswer : thoroughAnswer;
+              const hasAnyAnswer = showLiveAnswer || showThoroughAnswer || isThoroughGenerating;
 
-            {/* Past Q&A History */}
-            {suggestions.length > 0 && (
-              <div className="mt-6 pt-4 border-t border-gray-700/50">
-                <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-3">
-                  Previous Questions ({suggestions.length})
-                </h4>
-                <div className="space-y-4">
-                  {suggestions.map((item, index) => (
-                    <div
-                      key={item.id}
-                      ref={(el) => {
-                        if (suggestionRefs) {
-                          suggestionRefs.current[index] = el;
-                        }
-                      }}
-                      className="relative pl-3 py-2 border-l-2 border-gray-600 hover:border-blue-500 transition-colors"
-                    >
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-[10px] font-bold bg-gray-700 text-gray-300 w-5 h-5 rounded flex items-center justify-center">
-                          {index + 1}
-                        </span>
-                        <span className={`text-[10px] font-bold uppercase tracking-wider ${
-                          item.type === 'match' ? 'text-blue-400' : 'text-purple-400'
-                        }`}>
-                          {item.type === 'match' ? 'Knowledge Match' : 'AI Generated'}
-                        </span>
-                      </div>
-                      <h5 className="text-sm font-medium text-white mb-1 leading-snug">
-                        {item.question}
-                      </h5>
-                      <p className="text-xs text-gray-400 leading-relaxed line-clamp-3">
-                        {item.answer}
-                      </p>
+              return hasAnyAnswer ? (
+                <>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setCurrentAnswerView('live')}
+                        className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider rounded-l transition-colors ${
+                          currentAnswerView === 'live'
+                            ? 'bg-green-500/30 text-green-300 border border-green-500/50'
+                            : 'bg-gray-700/50 text-gray-400 border border-gray-600 hover:bg-gray-600/50'
+                        }`}
+                      >
+                        Live
+                        {selectedHistoryIndex === null && isStreaming && (
+                          <span className="ml-1 inline-block w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
+                        )}
+                      </button>
+                      <button
+                        onClick={() => setCurrentAnswerView('thorough')}
+                        disabled={!showThoroughAnswer && !isThoroughGenerating}
+                        className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider rounded-r transition-colors ${
+                          currentAnswerView === 'thorough'
+                            ? 'bg-purple-500/30 text-purple-300 border border-purple-500/50'
+                            : showThoroughAnswer || isThoroughGenerating
+                              ? 'bg-gray-700/50 text-gray-400 border border-gray-600 hover:bg-gray-600/50'
+                              : 'bg-gray-800/50 text-gray-600 border border-gray-700 cursor-not-allowed'
+                        }`}
+                      >
+                        Thorough
+                        {selectedHistoryIndex === null && isThoroughGenerating && (
+                          <span className="ml-1 inline-block w-1.5 h-1.5 bg-purple-400 rounded-full animate-pulse" />
+                        )}
+                        {selectedHistoryIndex === null && thoroughError && (
+                          <span className="ml-1 text-red-400">!</span>
+                        )}
+                      </button>
                     </div>
-                  ))}
+                    {currentAnswerView === 'thorough' && thoroughModel && selectedHistoryIndex === null && (
+                      <span className="text-[9px] text-purple-400/60">
+                        {thoroughModel === 'gemini-3-pro-preview' ? 'Gemini 3 Pro' : 'Claude Opus 4.5'}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Live Answer View */}
+                  {currentAnswerView === 'live' && (
+                    <>
+                      {showLiveAnswer ? (
+                        <div className="space-y-2">
+                          {selectedHistoryIndex === null && presetAnswer && (
+                            <span className="text-[9px] bg-yellow-500/20 text-yellow-300 px-1.5 py-0.5 rounded">
+                              Knowledge Base Match
+                            </span>
+                          )}
+                          <div className="text-base text-gray-100 leading-relaxed font-light whitespace-pre-wrap">
+                            {showLiveAnswer}
+                            {selectedHistoryIndex === null && isStreaming && (
+                              <span className="inline-block w-2 h-4 bg-green-400 ml-1 animate-pulse" />
+                            )}
+                          </div>
+                          <div ref={answerEndRef} />
+                        </div>
+                      ) : (
+                        <div className="flex-1 flex flex-col items-center justify-center text-gray-500 py-8">
+                          <div className="text-sm">
+                            {isStreaming ? 'Generating answer...' : 'Waiting for response...'}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {/* Thorough Answer View */}
+                  {currentAnswerView === 'thorough' && (
+                    <div className="space-y-2">
+                      {selectedHistoryIndex === null && thoroughError ? (
+                        <div className="text-sm text-red-400 bg-red-900/20 border border-red-500/30 rounded-lg p-3">
+                          Error: {thoroughError}
+                        </div>
+                      ) : showThoroughAnswer ? (
+                        <div className="text-base text-gray-100 leading-relaxed whitespace-pre-wrap">
+                          {showThoroughAnswer}
+                        </div>
+                      ) : selectedHistoryIndex === null && isThoroughGenerating ? (
+                        <div className="flex items-center gap-2 text-purple-300/60 py-8">
+                          <span className="inline-block w-2 h-2 bg-purple-400 rounded-full animate-pulse" />
+                          Generating thorough answer...
+                        </div>
+                      ) : (
+                        <div className="text-gray-500 py-8 text-center text-sm">
+                          No thorough answer available
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center text-gray-500 py-8">
+                  <div className="text-sm">
+                    {isStreaming ? 'Generating answer...' : 'Waiting for response...'}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
           </div>
 
           {/* Footer with context summary */}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { INITIAL_QUESTIONS, LIVE_MODELS } from './constants';
-import { InterviewQA, ConnectionState, TranscriptItem, TokenStats, KnowledgeItem } from './types';
+import { InterviewQA, ConnectionState, TranscriptItem, TokenStats, KnowledgeItem, SuggestionItem } from './types';
 import { GeminiLiveService } from './services/geminiService';
 import { ScreenScannerService } from './services/screenScannerService';
 import { EmbeddingService, EmbeddedChunk, EmbeddingMatch } from './services/embeddingService';
@@ -16,6 +16,7 @@ import { getStoredPresets } from './components/GuideTab';
 import { ParsedActivity } from './services/activityParserService';
 import { PROMPT_INTRO, DEFAULT_ANSWERING_INSTRUCTIONS, PROMPT_CRITICAL, renderPrompt } from './services/promptUtils';
 import { logger } from './services/logger';
+import { thoroughAnswerService, ThoroughModel, THOROUGH_MODELS } from './services/thoroughAnswerService';
 
 // Pricing Constants for Gemini 2.5 Flash Native Audio (Live API)
 // Model: gemini-2.5-flash-native-audio-preview-12-2025
@@ -37,14 +38,6 @@ const VIDEO_TOKENS_PER_SECOND = 263;   // 263 tokens per second of video
 
 // Detect Electron environment
 const isElectron = !!window.electronAPI;
-
-interface SuggestionItem {
-  id: string;
-  type: 'match' | 'ai';
-  question: string;
-  answer: string;
-  timestamp: number;
-}
 
 // LocalStorage helpers for Q&A persistence
 const SUGGESTIONS_STORAGE_KEY = 'interview_hud_suggestions';
@@ -136,6 +129,12 @@ export default function App() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingQuestion, setStreamingQuestion] = useState<string>('');
 
+  // Thorough answer state (parallel generation with better model)
+  const [thoroughAnswer, setThoroughAnswer] = useState<string>('');
+  const [isThoroughGenerating, setIsThoroughGenerating] = useState(false);
+  const [thoroughError, setThoroughError] = useState<string | null>(null);
+  const [selectedThoroughModel, setSelectedThoroughModel] = useState<ThoroughModel>('gemini-3-pro-preview');
+
   // RAG context state
   const [retrievedChunks, setRetrievedChunks] = useState<EmbeddedChunk[]>([]);
   const [ragChunks, setRagChunks] = useState<KnowledgeItem[]>([]);  // Actual chunks sent to Gemini
@@ -153,6 +152,9 @@ export default function App() {
 
   // Suggestion refs for scrolling
   const suggestionRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  // Track current question's suggestion ID for updating thoroughAnswer
+  const currentSuggestionIdRef = useRef<string | null>(null);
 
   const geminiServiceRef = useRef<GeminiLiveService | null>(null);
   const embeddingServiceRef = useRef<EmbeddingService | null>(null);
@@ -186,6 +188,18 @@ export default function App() {
     };
     checkKey();
   }, []);
+
+  // Update suggestion's thoroughAnswer when generation completes
+  useEffect(() => {
+    if (!isThoroughGenerating && thoroughAnswer && currentSuggestionIdRef.current) {
+      const suggestionId = currentSuggestionIdRef.current;
+      setSuggestions(prev => prev.map(s =>
+        s.id === suggestionId
+          ? { ...s, thoroughAnswer }
+          : s
+      ));
+    }
+  }, [isThoroughGenerating, thoroughAnswer]);
 
   // Initialize embeddings on app load
   useEffect(() => {
@@ -304,17 +318,17 @@ export default function App() {
     if (!isElectron || !window.electronAPI) return;
 
     const sources = await window.electronAPI.getAudioSources();
-    logger.info(`Audio sources refreshed: ${sources.length} sources found`);
-    sources.forEach(s => logger.info(`  - ${s.name} (${s.id})`));
+    logger.debug(`Audio sources refreshed: ${sources.length} sources found`);
+    sources.forEach(s => logger.debug(`  - ${s.name} (${s.id})`));
     setSystemAudioSources(sources);
 
     // Don't auto-select if user has manually chosen a source
     if (userSelectedSourceRef.current) {
-      logger.info(`User has manually selected source, skipping auto-select`);
+      logger.debug(`User has manually selected source, skipping auto-select`);
       // Verify the selected source still exists
       const stillExists = sources.some(s => s.id === selectedSystemSource);
       if (!stillExists && sources.length > 0) {
-        logger.warn(`Previously selected source no longer available, keeping selection`);
+        logger.debug(`Previously selected source no longer available, keeping selection`);
       }
       return;
     }
@@ -326,16 +340,16 @@ export default function App() {
         // Auto-select "Entire Screen" as default for reliability
         const entireScreen = sources.find(s => s.name.toLowerCase().includes('entire screen'));
         if (entireScreen) {
-          logger.info(`Auto-selecting: ${entireScreen.name}`);
+          logger.debug(`Auto-selecting: ${entireScreen.name}`);
           setSelectedSystemSource(entireScreen.id);
         } else if (sources.length > 0) {
-          logger.info(`Auto-selecting first source: ${sources[0].name}`);
+          logger.debug(`Auto-selecting first source: ${sources[0].name}`);
           setSelectedSystemSource(sources[0].id);
         }
       } else {
         const monitor = sources.find(s => s.type === 'monitor');
         if (monitor) {
-          logger.info(`Auto-selecting monitor: ${monitor.name}`);
+          logger.debug(`Auto-selecting monitor: ${monitor.name}`);
           setSelectedSystemSource(monitor.id);
         }
       }
@@ -465,105 +479,49 @@ export default function App() {
       // Electron: Start system audio capture
       if (isElectron && window.electronAPI && audioMode !== 'mic' && selectedSystemSource) {
         const platform = window.electronAPI.platform;
-        logger.info(`Starting system audio capture on ${platform}, source: ${selectedSystemSource}`);
+        logger.debug(`Starting system audio capture on ${platform}, source: ${selectedSystemSource}`);
 
         if (platform === 'win32') {
-          // Windows: Must capture video to get audio (they're tied together in desktop capture)
-          // We capture both but only send audio to Gemini
-          logger.info('Attempting Windows system audio capture with source:', selectedSystemSource);
+          // Windows: Use getDisplayMedia which shows native Chrome picker
+          // User must check "Share system audio" checkbox
+          logger.debug('Starting Windows system audio capture via getDisplayMedia');
 
-          // Try multiple approaches to capture audio
-          const captureAttempts = [
-            // Attempt 1: Standard approach with minimal video
-            async () => {
-              const stream = await (navigator.mediaDevices as any).getUserMedia({
-                audio: {
-                  mandatory: {
-                    chromeMediaSource: 'desktop',
-                    chromeMediaSourceId: selectedSystemSource
-                  }
-                },
-                video: {
-                  mandatory: {
-                    chromeMediaSource: 'desktop',
-                    chromeMediaSourceId: selectedSystemSource,
-                    maxWidth: 1,
-                    maxHeight: 1
-                  }
-                }
-              });
-              return stream;
-            },
-            // Attempt 2: Try with larger video dimensions (some sources need this)
-            async () => {
-              const stream = await (navigator.mediaDevices as any).getUserMedia({
-                audio: {
-                  mandatory: {
-                    chromeMediaSource: 'desktop',
-                    chromeMediaSourceId: selectedSystemSource
-                  }
-                },
-                video: {
-                  mandatory: {
-                    chromeMediaSource: 'desktop',
-                    chromeMediaSourceId: selectedSystemSource,
-                    maxWidth: 320,
-                    maxHeight: 240
-                  }
-                }
-              });
-              return stream;
-            },
-            // Attempt 3: Use getDisplayMedia as fallback (might prompt user)
-            async () => {
-              logger.info('Trying getDisplayMedia as fallback...');
-              const stream = await navigator.mediaDevices.getDisplayMedia({
-                audio: true,
-                video: { width: 1, height: 1 }
-              });
-              return stream;
+          try {
+            const displayStream = await navigator.mediaDevices.getDisplayMedia({
+              video: true,
+              audio: true
+            });
+
+            const audioTrack = displayStream.getAudioTracks()[0];
+            if (!audioTrack) {
+              logger.error('No audio track - user likely did not check "Share system audio"');
+              alert('No audio detected!\n\nMake sure to check the "Share system audio" checkbox in the screen picker dialog.');
+              displayStream.getTracks().forEach(t => t.stop());
+              return;
             }
-          ];
 
-          let fullStream: MediaStream | null = null;
-          let lastError: any = null;
+            // Stop video tracks - we only need audio
+            displayStream.getVideoTracks().forEach(t => t.stop());
 
-          for (let i = 0; i < captureAttempts.length; i++) {
-            try {
-              logger.info(`Audio capture attempt ${i + 1}/${captureAttempts.length}`);
-              fullStream = await captureAttempts[i]();
-              if (fullStream) {
-                logger.info(`Capture attempt ${i + 1} succeeded`);
-                break;
-              }
-            } catch (err: any) {
-              logger.warn(`Capture attempt ${i + 1} failed:`, err?.message || err);
-              lastError = err;
-              // Continue to next attempt
+            // Create stream with only audio
+            systemStream = new MediaStream([audioTrack]);
+
+            // Handle when user stops sharing
+            audioTrack.onended = () => {
+              logger.info('System audio track ended');
+              handleDisconnect();
+            };
+
+            logger.debug('Windows system audio capture started successfully');
+          } catch (err: any) {
+            if (err.name === 'NotAllowedError') {
+              // User cancelled the picker - that's fine
+              logger.debug('User cancelled screen picker');
+              return;
             }
-          }
-
-          if (fullStream) {
-            const audioTracks = fullStream.getAudioTracks();
-            const videoTracks = fullStream.getVideoTracks();
-            logger.info(`Captured tracks - Audio: ${audioTracks.length}, Video: ${videoTracks.length}`);
-
-            // Stop video tracks immediately - we don't need them
-            videoTracks.forEach(track => track.stop());
-
-            if (audioTracks.length > 0) {
-              systemStream = new MediaStream(audioTracks);
-              logger.info('Windows system audio capture started successfully');
-            } else {
-              logger.error('No audio tracks captured from source!');
-              alert('No audio was captured from this source. Please:\n\n1. START PLAYING AUDIO first (YouTube, music, etc.)\n2. Then click Start while audio is playing\n3. Try selecting a different source\n4. For best results, use "Entire Screen"');
-              return; // Don't continue with connection
-            }
-          } else {
-            logger.error('All capture attempts failed');
-            logger.error('Last error:', lastError?.name, lastError?.message);
-            alert(`Failed to capture system audio after multiple attempts.\n\nError: ${lastError?.message || 'Unknown error'}\n\nTry:\n1. Make sure audio is ACTIVELY PLAYING\n2. Select "Entire Screen" as the source\n3. Close and reopen the app\n4. Check Windows privacy settings`);
-            return; // Don't continue with connection
+            logger.error('Failed to capture system audio:', err);
+            alert('Failed to capture audio: ' + (err.message || 'Unknown error'));
+            return;
           }
         } else {
           // Linux: Use IPC to start PulseAudio capture
@@ -698,11 +656,13 @@ ${activePreset.instructions}`;
         setQuestions(prevQuestions => {
           const match = prevQuestions.find(q => q.id === id);
           if (match) {
+            const suggestionId = Date.now().toString();
+            currentSuggestionIdRef.current = suggestionId;
             setSuggestions(prev => [...prev, {
-              id: Date.now().toString(),
+              id: suggestionId,
               type: 'match',
               question: match.question,
-              answer: match.answer,
+              liveAnswer: match.answer,
               timestamp: Date.now()
             }]);
             setActiveQuestionId(id);
@@ -712,11 +672,13 @@ ${activePreset.instructions}`;
       },
       onAiAnswer: (answer, question) => {
         // Finalize streaming answer into suggestions
+        const suggestionId = currentSuggestionIdRef.current || Date.now().toString();
         setSuggestions(prev => [...prev, {
-          id: Date.now().toString(),
+          id: suggestionId,
           type: 'ai',
           question: question,
-          answer: answer,
+          liveAnswer: answer,
+          thoroughAnswer: thoroughAnswer || undefined,  // Include if already generated
           timestamp: Date.now()
         }]);
         setActiveQuestionId(null);
@@ -728,12 +690,21 @@ ${activePreset.instructions}`;
         setStreamingAnswer(prev => prev + chunk);
       },
       onStreamingStart: async (question) => {
+        // Generate suggestion ID for this question
+        currentSuggestionIdRef.current = Date.now().toString();
+
         setIsStreaming(true);
         setStreamingAnswer('');
         setStreamingQuestion(question);
         setShowLiveAnswerPanel(true);
 
+        // Reset thorough answer for new question
+        setThoroughAnswer('');
+        setThoroughError(null);
+        setIsThoroughGenerating(true);
+
         // Retrieve relevant context chunks for this question (for UI display)
+        let currentRagChunks: KnowledgeItem[] = [];
         if (embeddingServiceRef.current) {
           try {
             const { qaMatches: matches, contextChunks } = await embeddingServiceRef.current.findComprehensiveMatches(question);
@@ -743,6 +714,42 @@ ${activePreset.instructions}`;
             console.warn('Failed to retrieve context:', err);
           }
         }
+
+        // Get current RAG chunks for thorough answer
+        currentRagChunks = knowledgeItemsRef.current.slice(0, 5);
+
+        // Get preset instructions
+        let presetInstructions = '';
+        if (activePresetId) {
+          const presets = getStoredPresets();
+          const activePreset = presets.find(p => p.id === activePresetId);
+          if (activePreset) {
+            presetInstructions = activePreset.instructions;
+          }
+        }
+
+        // Generate thorough answer in parallel (don't await - let it run async)
+        (async () => {
+          try {
+            const thoroughApiKey = isElectron && window.electronAPI
+              ? await window.electronAPI.getApiKey()
+              : (process.env.API_KEY || '');
+
+            const result = await thoroughAnswerService.generateAnswer({
+              question,
+              ragChunks: currentRagChunks,
+              presetInstructions,
+              model: selectedThoroughModel,
+              apiKey: thoroughApiKey,
+            });
+            setThoroughAnswer(result);
+          } catch (err: any) {
+            logger.error('[ThoroughAnswer] Generation failed:', err);
+            setThoroughError(err?.message || 'Failed to generate thorough answer');
+          } finally {
+            setIsThoroughGenerating(false);
+          }
+        })();
       },
       onStreamingEnd: () => {
         // Streaming end is handled in onAiAnswer
@@ -1142,7 +1149,7 @@ ${activePreset.instructions}`;
             onSelectAudioMode={setAudioMode}
             onSelectMic={setSelectedMicId}
             onSelectSystemSource={(id) => {
-              logger.info(`User manually selected audio source: ${id}`);
+              logger.debug(`User manually selected audio source: ${id}`);
               userSelectedSourceRef.current = true;
               setSelectedSystemSource(id);
             }}
@@ -1156,6 +1163,8 @@ ${activePreset.instructions}`;
             onRefreshEmbeddings={refreshEmbeddings}
             activePresetId={activePresetId}
             onTogglePreset={(id) => setActivePresetId(prev => prev === id ? null : id)}
+            selectedThoroughModel={selectedThoroughModel}
+            onSelectThoroughModel={setSelectedThoroughModel}
             liveModels={LIVE_MODELS}
             isElectron={isElectron}
             platform={window.electronAPI?.platform}
@@ -1183,6 +1192,10 @@ ${activePreset.instructions}`;
               onScrollToSuggestion={scrollToSuggestion}
               onClearHistory={clearHistory}
               suggestionRefs={suggestionRefs}
+              thoroughAnswer={thoroughAnswer}
+              isThoroughGenerating={isThoroughGenerating}
+              thoroughModel={selectedThoroughModel}
+              thoroughError={thoroughError}
             />
           ) : (
             /* Status indicators when not showing Live Answer Panel */

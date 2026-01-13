@@ -3,15 +3,15 @@ import { KnowledgeItem } from "../types";
 import { logger } from "./logger";
 import { EMBEDDING_MODEL, ACTIVITY_PARSER_MODEL } from "../constants";
 
-// Schema for structured CV/Activities parsing
-const CV_SCHEMA: Schema = {
+// Schema for structured document parsing (CV/Activities OR Q&A)
+const DOCUMENT_SCHEMA: Schema = {
   type: Type.ARRAY,
   items: {
     type: Type.OBJECT,
     properties: {
-      title: { type: Type.STRING, description: "Title of the job, activity, or degree" },
-      content: { type: Type.STRING, description: "Detailed description, bullet points, and achievements combined into a single text block." },
-      type: { type: Type.STRING, enum: ['experience', 'activity', 'education', 'other'] },
+      title: { type: Type.STRING, description: "For CV/Activities: title of job/activity/degree. For Q&A: the QUESTION itself" },
+      content: { type: Type.STRING, description: "For CV/Activities: detailed description. For Q&A: the ANSWER to the question" },
+      type: { type: Type.STRING, enum: ['experience', 'activity', 'education', 'qa', 'other'] },
       date: { type: Type.STRING },
       skills: { type: Type.ARRAY, items: { type: Type.STRING } }
     },
@@ -30,14 +30,26 @@ export class KnowledgeService {
   async parseDocument(fileBase64: string, mimeType: string): Promise<KnowledgeItem[]> {
     logger.info("[RAG] Parsing document...");
     const prompt = `
-      You are an expert Resume and Activity parser.
-      Analyze the attached document (CV, Resume, or Activity List).
-      Break it down into distinct, self-contained "Knowledge Items".
+      You are an expert document parser for interview preparation.
 
-      For each item:
-      1. 'content': MUST be detailed. Combine the role description, bullet points, metrics, and outcomes into a coherent paragraph or list. This text will be used for semantic search, so it needs to be rich.
-      2. 'type': Classify as 'experience' (jobs), 'activity' (projects/extracurriculars), 'education', or 'other'.
-      3. 'skills': Extract relevant technical or soft skills mentioned in this specific section.
+      FIRST, identify what type of document this is:
+      - CV/Resume/Activities → Parse each job, activity, or education as separate items
+      - Q&A Document (interview questions with answers) → Parse each Q&A pair as one item
+
+      PARSING RULES:
+      - For CV/Activities:
+        * 'title': The job title, activity name, or degree
+        * 'content': MUST be detailed - combine description, bullet points, metrics, outcomes
+        * 'type': Use 'experience' (jobs), 'activity' (projects/extracurriculars), 'education', or 'other'
+        * 'skills': Extract relevant skills mentioned
+
+      - For Q&A Documents:
+        * 'title': The QUESTION exactly as written
+        * 'content': The complete ANSWER to that question
+        * 'type': Use 'qa'
+        * 'skills': Extract any skills/qualities mentioned in the answer (optional)
+
+      Each Q&A pair becomes ONE chunk (question + answer together).
     `;
 
     const result = await this.ai.models.generateContent({
@@ -52,7 +64,7 @@ export class KnowledgeService {
       ],
       config: {
         responseMimeType: "application/json",
-        responseSchema: CV_SCHEMA
+        responseSchema: DOCUMENT_SCHEMA
       }
     });
 
@@ -79,14 +91,26 @@ export class KnowledgeService {
   async parseText(text: string): Promise<KnowledgeItem[]> {
     logger.info("[RAG] Parsing pasted text...");
     const prompt = `
-      You are an expert Resume and Activity parser.
-      Analyze the following text (CV, Resume, or Activity List).
-      Break it down into distinct, self-contained "Knowledge Items".
+      You are an expert document parser for interview preparation.
 
-      For each item:
-      1. 'content': MUST be detailed. Combine the role description, bullet points, metrics, and outcomes into a coherent paragraph or list. This text will be used for semantic search, so it needs to be rich.
-      2. 'type': Classify as 'experience' (jobs), 'activity' (projects/extracurriculars), 'education', or 'other'.
-      3. 'skills': Extract relevant technical or soft skills mentioned in this specific section.
+      FIRST, identify what type of document this is:
+      - CV/Resume/Activities → Parse each job, activity, or education as separate items
+      - Q&A Document (interview questions with answers) → Parse each Q&A pair as one item
+
+      PARSING RULES:
+      - For CV/Activities:
+        * 'title': The job title, activity name, or degree
+        * 'content': MUST be detailed - combine description, bullet points, metrics, outcomes
+        * 'type': Use 'experience' (jobs), 'activity' (projects/extracurriculars), 'education', or 'other'
+        * 'skills': Extract relevant skills mentioned
+
+      - For Q&A Documents:
+        * 'title': The QUESTION exactly as written
+        * 'content': The complete ANSWER to that question
+        * 'type': Use 'qa'
+        * 'skills': Extract any skills/qualities mentioned in the answer (optional)
+
+      Each Q&A pair becomes ONE chunk (question + answer together).
 
       TEXT TO PARSE:
       ${text}
@@ -97,7 +121,7 @@ export class KnowledgeService {
       contents: prompt,
       config: {
         responseMimeType: "application/json",
-        responseSchema: CV_SCHEMA
+        responseSchema: DOCUMENT_SCHEMA
       }
     });
 
@@ -128,7 +152,10 @@ export class KnowledgeService {
     const failed: KnowledgeItem[] = [];
 
     for (const item of items) {
-      const textToEmbed = `Title: ${item.title}\nType: ${item.metadata.type}\nContent: ${item.content}\nSkills: ${item.metadata.skills?.join(', ') || ''}`;
+      // For Q&A items, embed question + answer together for better semantic matching
+      const textToEmbed = item.metadata.type === 'qa'
+        ? `Question: ${item.title}\nAnswer: ${item.content}`
+        : `Title: ${item.title}\nType: ${item.metadata.type}\nContent: ${item.content}\nSkills: ${item.metadata.skills?.join(', ') || ''}`;
 
       try {
         const result = await this.ai.models.embedContent({

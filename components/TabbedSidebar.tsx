@@ -6,6 +6,7 @@ import { ParsedActivity } from '../services/activityParserService';
 import { QuestionList } from './QuestionList';
 import { RecordingPanel } from './RecordingPanel';
 import { GuideTab } from './GuideTab';
+import { ThoroughModel, THOROUGH_MODELS } from '../services/thoroughAnswerService';
 
 type TabId = 'prep' | 'live' | 'guide' | 'artifacts';
 
@@ -91,6 +92,10 @@ interface TabbedSidebarProps {
   activePresetId: string | null;
   onTogglePreset: (id: string) => void;
 
+  // Thorough answer model
+  selectedThoroughModel: ThoroughModel;
+  onSelectThoroughModel: (model: ThoroughModel) => void;
+
   // Models list
   liveModels: Array<{ id: string; name: string }>;
 
@@ -131,6 +136,8 @@ export function TabbedSidebar({
   onRefreshEmbeddings,
   activePresetId,
   onTogglePreset,
+  selectedThoroughModel,
+  onSelectThoroughModel,
   liveModels,
   isElectron,
   platform,
@@ -592,10 +599,36 @@ export function TabbedSidebar({
 
         {/* GUIDE TAB */}
         {activeTab === 'guide' && (
-          <GuideTab
-            activePresetId={activePresetId}
-            onTogglePreset={onTogglePreset}
-          />
+          <div className="flex flex-col h-full">
+            {/* Thorough Answer Model Selector */}
+            <div className="p-4 border-b border-gray-700/50">
+              <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">
+                Thorough Answer Model
+              </h3>
+              <p className="text-[10px] text-gray-500 mb-2">
+                Generates a detailed answer in parallel with the live response
+              </p>
+              <select
+                value={selectedThoroughModel}
+                onChange={(e) => onSelectThoroughModel(e.target.value as ThoroughModel)}
+                className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-white"
+              >
+                {THOROUGH_MODELS.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Interview Mode Presets */}
+            <div className="flex-1 overflow-y-auto">
+              <GuideTab
+                activePresetId={activePresetId}
+                onTogglePreset={onTogglePreset}
+              />
+            </div>
+          </div>
         )}
 
         {/* ARTIFACTS TAB */}

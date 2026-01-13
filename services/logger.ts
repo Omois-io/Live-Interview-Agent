@@ -7,21 +7,21 @@ const isElectron = typeof window !== 'undefined' && window.electronAPI;
 
 export const logger = {
   info: (message: string, data?: any) => {
-    console.log(`[INFO] ${message}`, data || '');
+    console.log(message, data !== undefined ? data : '');
     if (isElectron) {
       window.electronAPI?.writeLog('INFO', message, data);
     }
   },
 
   warn: (message: string, data?: any) => {
-    console.warn(`[WARN] ${message}`, data || '');
+    console.warn(message, data !== undefined ? data : '');
     if (isElectron) {
       window.electronAPI?.writeLog('WARN', message, data);
     }
   },
 
   error: (message: string, data?: any) => {
-    console.error(`[ERROR] ${message}`, data || '');
+    console.error(message, data !== undefined ? data : '');
     if (isElectron) {
       // Convert Error objects to plain objects for serialization
       const errorData = data instanceof Error
@@ -32,10 +32,11 @@ export const logger = {
   },
 
   debug: (message: string, data?: any) => {
-    console.debug(`[DEBUG] ${message}`, data || '');
-    if (isElectron) {
-      window.electronAPI?.writeLog('DEBUG', message, data);
+    // Debug only in dev mode console, skip file logging
+    if (process.env.NODE_ENV === 'development') {
+      console.debug(message, data !== undefined ? data : '');
     }
+    // Don't write DEBUG to file - too noisy
   },
 
   getLogPath: async (): Promise<string | null> => {

@@ -381,7 +381,7 @@ export class GeminiLiveService {
     streams: { system?: MediaStream; mic?: MediaStream },
     electronConfig?: ElectronAudioConfig
   ) {
-    logger.info(`Starting audio mixing - System: ${!!streams.system}, Mic: ${!!streams.mic}, Electron mode: ${this.electronMode}`);
+    logger.debug(`Starting audio mixing - System: ${!!streams.system}, Mic: ${!!streams.mic}, Electron mode: ${this.electronMode}`);
 
     this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
       sampleRate: 16000,
@@ -392,7 +392,7 @@ export class GeminiLiveService {
       this.audioContext.resume();
     }
 
-    logger.info(`AudioContext created, state: ${this.audioContext.state}, sample rate: ${this.audioContext.sampleRate}`);
+    logger.debug(`AudioContext created, state: ${this.audioContext.state}, sample rate: ${this.audioContext.sampleRate}`);
 
     // Create mixer
     const mixer = this.audioContext.createGain();
@@ -445,7 +445,7 @@ export class GeminiLiveService {
 
       // Log every 100 audio frames (~6 seconds at 4096 buffer size)
       if (audioProcessCount % 100 === 1) {
-        logger.info(`Audio processing active - Frame ${audioProcessCount}, Blobs sent: ${totalBlobsSent}`);
+        logger.debug(`Audio processing active - Frame ${audioProcessCount}, Blobs sent: ${totalBlobsSent}`);
       }
 
       // In Electron mode, mix IPC audio buffer with processor output
@@ -474,7 +474,7 @@ export class GeminiLiveService {
 
       // Log first few blobs and periodically after
       if (totalBlobsSent <= 5 || totalBlobsSent % 100 === 0) {
-        logger.info(`Sending audio blob #${totalBlobsSent}, size: ${pcmBlob.data.length} bytes`);
+        logger.debug(`Sending audio blob #${totalBlobsSent}, size: ${pcmBlob.data.length} bytes`);
       }
 
       this.sessionPromise.then((session) => {
@@ -516,7 +516,7 @@ export class GeminiLiveService {
         logger.error('Failed to start system audio capture');
         return;
       }
-      logger.info('System audio capture started for source:', sourceId);
+      logger.debug('System audio capture started for source:', sourceId);
     });
 
     // Create analyser for system audio energy tracking
