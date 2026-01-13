@@ -452,25 +452,80 @@ export default function App() {
         if (platform === 'win32') {
           // Windows: Must capture video to get audio (they're tied together in desktop capture)
           // We capture both but only send audio to Gemini
-          try {
-            logger.info('Attempting Windows system audio capture with source:', selectedSystemSource);
-            const fullStream = await (navigator.mediaDevices as any).getUserMedia({
-              audio: {
-                mandatory: {
-                  chromeMediaSource: 'desktop',
-                  chromeMediaSourceId: selectedSystemSource
-                }
-              },
-              video: {
-                mandatory: {
-                  chromeMediaSource: 'desktop',
-                  chromeMediaSourceId: selectedSystemSource,
-                  maxWidth: 1,  // Minimal video - we only need it to unlock audio
-                  maxHeight: 1
-                }
-              }
-            });
+          logger.info('Attempting Windows system audio capture with source:', selectedSystemSource);
 
+          // Try multiple approaches to capture audio
+          const captureAttempts = [
+            // Attempt 1: Standard approach with minimal video
+            async () => {
+              const stream = await (navigator.mediaDevices as any).getUserMedia({
+                audio: {
+                  mandatory: {
+                    chromeMediaSource: 'desktop',
+                    chromeMediaSourceId: selectedSystemSource
+                  }
+                },
+                video: {
+                  mandatory: {
+                    chromeMediaSource: 'desktop',
+                    chromeMediaSourceId: selectedSystemSource,
+                    maxWidth: 1,
+                    maxHeight: 1
+                  }
+                }
+              });
+              return stream;
+            },
+            // Attempt 2: Try with larger video dimensions (some sources need this)
+            async () => {
+              const stream = await (navigator.mediaDevices as any).getUserMedia({
+                audio: {
+                  mandatory: {
+                    chromeMediaSource: 'desktop',
+                    chromeMediaSourceId: selectedSystemSource
+                  }
+                },
+                video: {
+                  mandatory: {
+                    chromeMediaSource: 'desktop',
+                    chromeMediaSourceId: selectedSystemSource,
+                    maxWidth: 320,
+                    maxHeight: 240
+                  }
+                }
+              });
+              return stream;
+            },
+            // Attempt 3: Use getDisplayMedia as fallback (might prompt user)
+            async () => {
+              logger.info('Trying getDisplayMedia as fallback...');
+              const stream = await navigator.mediaDevices.getDisplayMedia({
+                audio: true,
+                video: { width: 1, height: 1 }
+              });
+              return stream;
+            }
+          ];
+
+          let fullStream: MediaStream | null = null;
+          let lastError: any = null;
+
+          for (let i = 0; i < captureAttempts.length; i++) {
+            try {
+              logger.info(`Audio capture attempt ${i + 1}/${captureAttempts.length}`);
+              fullStream = await captureAttempts[i]();
+              if (fullStream) {
+                logger.info(`Capture attempt ${i + 1} succeeded`);
+                break;
+              }
+            } catch (err: any) {
+              logger.warn(`Capture attempt ${i + 1} failed:`, err?.message || err);
+              lastError = err;
+              // Continue to next attempt
+            }
+          }
+
+          if (fullStream) {
             const audioTracks = fullStream.getAudioTracks();
             const videoTracks = fullStream.getVideoTracks();
             logger.info(`Captured tracks - Audio: ${audioTracks.length}, Video: ${videoTracks.length}`);
@@ -486,11 +541,10 @@ export default function App() {
               alert('No audio was captured from this source. Please:\n\n1. START PLAYING AUDIO first (YouTube, music, etc.)\n2. Then click Start while audio is playing\n3. Try selecting a different source\n4. For best results, use "Entire Screen"');
               return; // Don't continue with connection
             }
-          } catch (err: any) {
-            logger.error('Failed to capture Windows system audio:', err);
-            logger.error('Error name:', err?.name);
-            logger.error('Error message:', err?.message);
-            alert('Failed to capture system audio. Please:\n\n1. Select a different source from the dropdown\n2. Make sure audio is ACTIVELY PLAYING\n3. Try selecting "Entire Screen" (works most reliably)\n4. Check Windows privacy settings allow screen recording');
+          } else {
+            logger.error('All capture attempts failed');
+            logger.error('Last error:', lastError?.name, lastError?.message);
+            alert(`Failed to capture system audio after multiple attempts.\n\nError: ${lastError?.message || 'Unknown error'}\n\nTry:\n1. Make sure audio is ACTIVELY PLAYING\n2. Select "Entire Screen" as the source\n3. Close and reopen the app\n4. Check Windows privacy settings`);
             return; // Don't continue with connection
           }
         } else {

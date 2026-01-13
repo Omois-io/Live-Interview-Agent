@@ -132,6 +132,10 @@ export class GeminiLiveService {
           outputAudioTranscription: {},  // Transcribe model's audio response
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } }
+          },
+          // Increase output token limit to prevent answer cutoff
+          generationConfig: {
+            maxOutputTokens: 8192,  // Allow longer responses (default is often ~2048)
           }
         },
         callbacks: {

@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { KnowledgeItem } from "../types";
 import { logger } from "./logger";
+import { EMBEDDING_MODEL, ACTIVITY_PARSER_MODEL } from "../constants";
 
 // Schema for structured CV/Activities parsing
 const CV_SCHEMA: Schema = {
@@ -40,7 +41,7 @@ export class KnowledgeService {
     `;
 
     const result = await this.ai.models.generateContent({
-      model: "gemini-2.0-flash-exp",
+      model: ACTIVITY_PARSER_MODEL,
       contents: [
         {
           parts: [
@@ -74,30 +75,82 @@ export class KnowledgeService {
     }));
   }
 
+  // 1b. Parse Text (for pasted text, not file upload)
+  async parseText(text: string): Promise<KnowledgeItem[]> {
+    logger.info("[RAG] Parsing pasted text...");
+    const prompt = `
+      You are an expert Resume and Activity parser.
+      Analyze the following text (CV, Resume, or Activity List).
+      Break it down into distinct, self-contained "Knowledge Items".
+
+      For each item:
+      1. 'content': MUST be detailed. Combine the role description, bullet points, metrics, and outcomes into a coherent paragraph or list. This text will be used for semantic search, so it needs to be rich.
+      2. 'type': Classify as 'experience' (jobs), 'activity' (projects/extracurriculars), 'education', or 'other'.
+      3. 'skills': Extract relevant technical or soft skills mentioned in this specific section.
+
+      TEXT TO PARSE:
+      ${text}
+    `;
+
+    const result = await this.ai.models.generateContent({
+      model: ACTIVITY_PARSER_MODEL,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: CV_SCHEMA
+      }
+    });
+
+    if (!result.text) {
+      throw new Error("Failed to parse text");
+    }
+
+    const rawItems = JSON.parse(result.text);
+    logger.info(`[RAG] Parsed ${rawItems.length} items from text.`);
+
+    return rawItems.map((item: any) => ({
+      id: Math.random().toString(36).substring(7),
+      title: item.title,
+      content: item.content,
+      metadata: {
+        type: item.type,
+        date: item.date,
+        skills: item.skills
+      }
+    }));
+  }
+
   // 2. Generate Embeddings for Chunks
-  async embedItems(items: KnowledgeItem[]): Promise<KnowledgeItem[]> {
+  // Returns object with embedded items and failed items for transparency
+  async embedItems(items: KnowledgeItem[]): Promise<{ embedded: KnowledgeItem[], failed: KnowledgeItem[] }> {
     logger.info(`[RAG] Generating embeddings for ${items.length} items...`);
-    const embeddedItems: KnowledgeItem[] = [];
+    const embedded: KnowledgeItem[] = [];
+    const failed: KnowledgeItem[] = [];
 
     for (const item of items) {
       const textToEmbed = `Title: ${item.title}\nType: ${item.metadata.type}\nContent: ${item.content}\nSkills: ${item.metadata.skills?.join(', ') || ''}`;
 
       try {
         const result = await this.ai.models.embedContent({
-          model: "text-embedding-004",
+          model: EMBEDDING_MODEL,
           contents: textToEmbed
         });
 
-        embeddedItems.push({
+        embedded.push({
           ...item,
           embedding: result.embeddings?.[0]?.values || result.embedding?.values
         });
       } catch (e) {
         logger.error(`[RAG] Failed to embed item: ${item.title}`, e);
+        // Keep the item without embedding - it won't be searchable but user can see it
+        failed.push({
+          ...item,
+          embedding: undefined
+        });
       }
     }
-    logger.info(`[RAG] Embeddings complete. Success: ${embeddedItems.length}/${items.length}`);
-    return embeddedItems;
+    logger.info(`[RAG] Embeddings complete. Success: ${embedded.length}/${items.length}, Failed: ${failed.length}`);
+    return { embedded, failed };
   }
 
   // 3. Search (Vector Similarity)
@@ -112,7 +165,7 @@ export class KnowledgeService {
 
     try {
         const queryResult = await this.ai.models.embedContent({
-          model: "text-embedding-004",
+          model: EMBEDDING_MODEL,
           contents: query
         });
         queryEmbedding = queryResult.embeddings?.[0]?.values || queryResult.embedding?.values;
