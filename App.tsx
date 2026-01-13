@@ -13,7 +13,7 @@ import { RecordingPanel } from './components/RecordingPanel';
 import { LiveAnswerPanel } from './components/LiveAnswerPanel';
 import { TabbedSidebar } from './components/TabbedSidebar';
 import { ParsedActivity } from './services/activityParserService';
-import { DEFAULT_SYSTEM_PROMPT, formatCheatSheet, renderPrompt } from './services/promptUtils';
+import { DEFAULT_SYSTEM_PROMPT, renderPrompt } from './services/promptUtils';
 import { logger } from './services/logger';
 
 // Pricing Constants for Gemini 2.5 Flash Native Audio (Live API)
@@ -552,11 +552,8 @@ export default function App() {
 
     geminiServiceRef.current = new GeminiLiveService(apiKey);
 
-    const cheatSheetStr = formatCheatSheet(questions);
     const systemInstruction = renderPrompt(promptTemplate, {
       company: company || 'General',
-      position: position || 'General',
-      cheatSheet: cheatSheetStr,
     });
 
     // Initialize embedding service for semantic matching

@@ -31,3 +31,4 @@ release/
 *.sw?
 Interview_questions_answers/
 CLAUDE.md
+questions.json
