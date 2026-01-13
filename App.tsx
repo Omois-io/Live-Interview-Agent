@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { INITIAL_QUESTIONS, LIVE_MODELS } from './constants';
-import { InterviewQA, ConnectionState, TranscriptItem, TokenStats } from './types';
+import { InterviewQA, ConnectionState, TranscriptItem, TokenStats, KnowledgeItem } from './types';
 import { GeminiLiveService } from './services/geminiService';
 import { ScreenScannerService } from './services/screenScannerService';
 import { EmbeddingService, EmbeddedChunk, EmbeddingMatch } from './services/embeddingService';
+import { KnowledgeService } from './services/knowledgeService';
 import { QuestionList } from './components/QuestionList';
 import { Visualizer } from './components/Visualizer';
 import { ApiKeyModal } from './components/ApiKeyModal';
@@ -113,10 +114,15 @@ export default function App() {
 
   // RAG context state
   const [retrievedChunks, setRetrievedChunks] = useState<EmbeddedChunk[]>([]);
+  const [ragChunks, setRagChunks] = useState<KnowledgeItem[]>([]);  // Actual chunks sent to Gemini
   const [qaMatches, setQaMatches] = useState<EmbeddingMatch[]>([]);
   const [showRecordingPanel, setShowRecordingPanel] = useState(false);
   const [showLiveAnswerPanel, setShowLiveAnswerPanel] = useState(false);
   const [parsedActivities, setParsedActivities] = useState<ParsedActivity[]>([]);
+
+  // Knowledge Base State (RAG items from uploaded documents)
+  const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
+  const knowledgeItemsRef = useRef<KnowledgeItem[]>([]);
 
   // Layout State
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -131,6 +137,7 @@ export default function App() {
 
   const geminiServiceRef = useRef<GeminiLiveService | null>(null);
   const embeddingServiceRef = useRef<EmbeddingService | null>(null);
+  const knowledgeServiceRef = useRef<KnowledgeService | null>(null);
   const screenScannerRef = useRef<ScreenScannerService | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement>(null);
 
@@ -191,6 +198,43 @@ export default function App() {
 
     initializeEmbeddings();
   }, [hasKey, questions, company]);
+
+  // Load knowledge items from localStorage and initialize service
+  useEffect(() => {
+    const initializeKnowledge = async () => {
+      if (!hasKey) return;
+
+      // Get API key
+      const apiKey = isElectron && window.electronAPI
+        ? await window.electronAPI.getApiKey()
+        : (process.env.API_KEY || '');
+
+      if (!apiKey) return;
+
+      // Create knowledge service
+      knowledgeServiceRef.current = new KnowledgeService(apiKey);
+
+      // Load cached knowledge items
+      try {
+        const saved = localStorage.getItem('interview_knowledge_items');
+        if (saved) {
+          const items = JSON.parse(saved) as KnowledgeItem[];
+          setKnowledgeItems(items);
+          knowledgeItemsRef.current = items;
+          logger.info(`Loaded ${items.length} knowledge items from cache`);
+        }
+      } catch (err) {
+        logger.error('Failed to load knowledge items:', err);
+      }
+    };
+
+    initializeKnowledge();
+  }, [hasKey]);
+
+  // Keep knowledge items ref in sync with state
+  useEffect(() => {
+    knowledgeItemsRef.current = knowledgeItems;
+  }, [knowledgeItems]);
 
   // Fetch Audio Devices (Mic)
   useEffect(() => {
@@ -273,13 +317,50 @@ export default function App() {
     return () => clearInterval(interval);
   }, [connectionState, refreshAudioSources]);
 
+  // Disconnect handler - defined early because it's used in multiple places
+  const handleDisconnect = useCallback(() => {
+    logger.info('Disconnecting session...');
+    if (geminiServiceRef.current) {
+      geminiServiceRef.current.disconnect();
+      geminiServiceRef.current = null;
+    }
+
+    // Stop Electron system audio capture
+    if (isElectron && window.electronAPI) {
+      window.electronAPI.stopSystemAudio();
+    }
+
+    if (streamsRef.current.system) streamsRef.current.system.getTracks().forEach(t => t.stop());
+    if (streamsRef.current.mic) streamsRef.current.mic.getTracks().forEach(t => t.stop());
+    streamsRef.current = {};
+    setMediaStream(null);
+
+    setConnectionState((prev) => {
+      if (prev === ConnectionState.CONNECTED || prev === ConnectionState.CONNECTING) {
+        setShowSummary(true);
+      }
+      return ConnectionState.DISCONNECTED;
+    });
+
+    setTokenStats(current => {
+      setLastSessionStats(current);
+      return current;
+    });
+
+    setActiveQuestionId(null);
+    setIsStreaming(false);
+    setStreamingAnswer('');
+    setStreamingQuestion('');
+    setLastError(null);
+  }, []);
+
   // Connection timeout safety
   useEffect(() => {
     let timeoutId: NodeJS.Timeout;
 
     if (connectionState === ConnectionState.CONNECTING || connectionState === ConnectionState.RECONNECTING) {
       timeoutId = setTimeout(() => {
-        console.error('Connection timed out');
+        logger.error('Connection timed out after 15 seconds');
         alert('Connection timed out. Please check your internet connection and API key.');
         handleDisconnect();
       }, 15000); // 15 seconds timeout
@@ -581,30 +662,41 @@ export default function App() {
       onStreamingEnd: () => {
         // Streaming end is handled in onAiAnswer
       },
-      // RAG: Retrieve relevant context when generating answers
+      // RAG: Retrieve relevant context from knowledge base
       onRetrieveContext: async (question: string): Promise<string> => {
-        if (!embeddingServiceRef.current) {
-          return '';
+        const currentItems = knowledgeItemsRef.current;
+
+        if (!knowledgeServiceRef.current || currentItems.length === 0) {
+          logger.warn('[RAG] No knowledge items available');
+          return 'NOTICE: No documents have been uploaded to the knowledge base. Answer based on general knowledge.';
         }
 
         try {
-          const chunks = await embeddingServiceRef.current.findRelevantChunks(question, 3, 0.6);
+          // Find similar items using vector search
+          const relevantItems = await knowledgeServiceRef.current.findSimilar(question, currentItems, 5);
 
-          if (chunks.length === 0) {
-            return '';
+          // Store the actual RAG chunks for UI display
+          setRagChunks(relevantItems);
+
+          if (relevantItems.length === 0) {
+            return 'No relevant context found in knowledge base.';
           }
 
-          // Format chunks for Gemini
+          // Format context for Gemini
           let context = '=== RELEVANT CANDIDATE CONTEXT ===\n\n';
-          chunks.forEach((chunk, i) => {
-            context += `[${chunk.source}]\n${chunk.content}\n\n`;
+          relevantItems.forEach((item, i) => {
+            context += `[${item.metadata.type.toUpperCase()}: ${item.title}]\n${item.content}\n`;
+            if (item.metadata.skills && item.metadata.skills.length > 0) {
+              context += `Skills: ${item.metadata.skills.join(', ')}\n`;
+            }
+            context += '\n---\n\n';
           });
-          context += '=== END CONTEXT ===\n\nUse the above context to personalize your answer.';
+          context += '=== END CONTEXT ===\n\nUse the above context to personalize your answer based on the candidate\'s actual experiences.';
 
-          console.log(`RAG: Retrieved ${chunks.length} chunks for question: "${question.slice(0, 50)}..."`);
+          logger.info(`[RAG] Retrieved ${relevantItems.length} items for: "${question.slice(0, 50)}..."`);
           return context;
         } catch (err) {
-          console.error('RAG retrieval error:', err);
+          logger.error('[RAG] Retrieval error:', err);
           return '';
         }
       },
@@ -613,7 +705,7 @@ export default function App() {
         setTranscriptHistory(prev => [...prev, {
           id: Date.now().toString(),
           text: text,
-          sender: 'user',
+          sender: speaker === 'ai' ? 'model' : 'user',
           speaker: speaker,
           timestamp: Date.now()
         }]);
@@ -706,40 +798,6 @@ export default function App() {
       setIsEmbedding(false);
     }
   }, [questions, company, connectionState, isElectron]);
-
-  const handleDisconnect = useCallback(() => {
-    if (geminiServiceRef.current) {
-      geminiServiceRef.current.disconnect();
-      geminiServiceRef.current = null;
-    }
-
-    // Stop Electron system audio capture
-    if (isElectron && window.electronAPI) {
-      window.electronAPI.stopSystemAudio();
-    }
-
-    if (streamsRef.current.system) streamsRef.current.system.getTracks().forEach(t => t.stop());
-    if (streamsRef.current.mic) streamsRef.current.mic.getTracks().forEach(t => t.stop());
-    streamsRef.current = {};
-    setMediaStream(null);
-
-    setConnectionState((prev) => {
-      if (prev === ConnectionState.CONNECTED || prev === ConnectionState.CONNECTING) {
-        setShowSummary(true);
-      }
-      return ConnectionState.DISCONNECTED;
-    });
-
-    setTokenStats(current => {
-      setLastSessionStats(current);
-      return current;
-    });
-
-    setActiveQuestionId(null);
-    setIsStreaming(false);
-    setStreamingAnswer('');
-    setStreamingQuestion('');
-  }, []);
 
   const handleSaveQuestion = () => {
     if (currentEdit.id) {
@@ -1128,6 +1186,7 @@ export default function App() {
               isStreaming={isStreaming}
               qaMatches={qaMatches}
               contextChunks={retrievedChunks}
+              ragChunks={ragChunks}
               presetAnswer={
                 qaMatches.length > 0
                   ? questions.find(q => q.id === qaMatches[0].id)?.answer
@@ -1229,6 +1288,8 @@ export default function App() {
       <ContextModal
         isOpen={showContextModal}
         onClose={() => setShowContextModal(false)}
+        knowledgeItems={knowledgeItems}
+        onItemsUpdate={setKnowledgeItems}
       />
 
       {/* Edit Modal */}

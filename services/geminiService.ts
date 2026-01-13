@@ -8,7 +8,7 @@ interface LiveConnectionCallbacks {
   onMatch: (questionId: string) => void;
   onAiAnswer: (answer: string, question: string) => void;
   onTranscriptUpdate: (text: string) => void;
-  onTranscriptCommit: (text: string, speaker: 'interviewer' | 'you') => void;
+  onTranscriptCommit: (text: string, speaker: 'interviewer' | 'you' | 'ai') => void;
   onTokenUpdate: (tokenData: {
     textInput: number;
     audioVideoInput: number;
@@ -41,6 +41,7 @@ export class GeminiLiveService {
   private sessionPromise: Promise<any> | null = null;
   private isConnected: boolean = false;
   private currentTranscript: string = "";
+  private currentModelTranscript: string = "";  // Buffer for model's output transcription
 
   // Streaming answer state
   private isStreamingAnswer: boolean = false;
@@ -104,23 +105,10 @@ export class GeminiLiveService {
     const isLinux = window.electronAPI?.platform === 'linux';
     this.electronMode = !!electronConfig && !!window.electronAPI && isLinux;
 
-    // Tool 1: Knowledge Base Match
-    const selectQuestionTool: FunctionDeclaration = {
-      name: 'selectQuestion',
-      description: 'Use this when the user asks a question that closely matches one in the provided Cheat Sheet.',
-      parameters: {
-        type: Type.OBJECT,
-        properties: {
-          questionId: { type: Type.STRING },
-        },
-        required: ['questionId'],
-      },
-    };
-
-    // Tool 2: Signal to generate a streaming answer with RAG context
+    // RAG Tool: Generate answer with retrieved context
     const generateAnswerTool: FunctionDeclaration = {
       name: 'generateAnswer',
-      description: 'Use this when the user asks a valid interview question that is NOT in the Cheat Sheet. The tool will return relevant context from the candidate\'s background (activities, CV, etc.). Use that context to generate a personalized answer as streaming text.',
+      description: 'Use this when the interviewer asks any interview question. The tool will return relevant context from the candidate\'s uploaded documents (CV, activities, experiences). Use that context to generate a personalized answer.',
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -138,12 +126,12 @@ export class GeminiLiveService {
         model: modelId,
         config: {
           systemInstruction: systemInstruction,
-          responseModalities: [Modality.TEXT], // TEXT for streaming responses
-          tools: [{ functionDeclarations: [selectQuestionTool, generateAnswerTool] }],
-          inputAudioTranscription: {},
+          responseModalities: [Modality.AUDIO],
+          tools: [{ functionDeclarations: [generateAnswerTool] }],
+          inputAudioTranscription: {},  // Transcribe user's speech
+          outputAudioTranscription: {},  // Transcribe model's audio response
           speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
-            languageCode: 'en-US' // Enforce English
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } }
           }
         },
         callbacks: {
@@ -221,10 +209,7 @@ export class GeminiLiveService {
             // 2. Handle Tool Calls
             if (message.toolCall) {
               message.toolCall.functionCalls.forEach(fc => {
-                if (fc.name === 'selectQuestion') {
-                  const qId = (fc.args as any).questionId;
-                  if (qId) callbacks.onMatch(qId);
-                } else if (fc.name === 'generateAnswer') {
+                if (fc.name === 'generateAnswer') {
                   // Signal that streaming is starting
                   const args = fc.args as any;
                   if (callbacks.onStreamingStart) {
@@ -296,26 +281,48 @@ export class GeminiLiveService {
               }
             }
 
-            // 3. Handle Transcription
+            // 3. Handle Transcription (like working AI Studio version - only check inputTranscription)
             if (message.serverContent?.inputTranscription) {
               const text = message.serverContent.inputTranscription.text;
               if (text) {
                 this.currentTranscript += text;
                 callbacks.onTranscriptUpdate(this.currentTranscript);
+                logger.info(`Transcript update: "${text}"`);
+              }
+            }
+
+            // 3.5. Handle Output Transcription (model's spoken response as text)
+            if (message.serverContent?.outputTranscription) {
+              const text = (message.serverContent.outputTranscription as any).text;
+              if (text) {
+                this.currentModelTranscript += text;
+                logger.info(`Model transcript update: "${text}"`);
+                // Stream the model's text as it comes in
+                if (this.isStreamingAnswer && callbacks.onTextChunk) {
+                  callbacks.onTextChunk(text);
+                }
               }
             }
 
             // 4. Handle Turn Complete
             if (message.serverContent?.turnComplete) {
               // Finalize streamed answer if we were streaming
-              if (this.isStreamingAnswer && this.streamedAnswerBuffer.trim()) {
-                callbacks.onAiAnswer(this.streamedAnswerBuffer, this.streamingQuestion);
+              // Use model transcript (from outputTranscription) or streamedAnswerBuffer (from text modality)
+              const answerText = this.currentModelTranscript.trim() || this.streamedAnswerBuffer.trim();
+              if (this.isStreamingAnswer && answerText) {
+                callbacks.onAiAnswer(answerText, this.streamingQuestion);
                 if (callbacks.onStreamingEnd) {
                   callbacks.onStreamingEnd();
                 }
                 this.isStreamingAnswer = false;
                 this.streamingQuestion = "";
                 this.streamedAnswerBuffer = "";
+              }
+
+              // Commit model transcript to transcript history
+              if (this.currentModelTranscript.trim()) {
+                callbacks.onTranscriptCommit(this.currentModelTranscript, 'ai');
+                this.currentModelTranscript = "";
               }
 
               if (this.currentTranscript.trim()) {
@@ -415,23 +422,9 @@ export class GeminiLiveService {
     }
 
     // 3. Setup Processor
-    this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+    this.processor = this.audioContext.createScriptProcessor(2048, 1, 1);
     mixer.connect(this.processor);
     this.processor.connect(this.audioContext.destination);
-
-    // 4. Send initial audio packet immediately to keep connection alive
-    // The ScriptProcessor takes ~256ms to fire first callback, but Gemini expects audio sooner
-    const initialSilence = new Float32Array(4096); // Silent buffer
-    const initialBlob = createBlob(initialSilence);
-    logger.info('Sending initial audio packet to keep connection alive');
-    this.sessionPromise?.then((session) => {
-      if (this.isConnected) {
-        session.sendRealtimeInput([initialBlob]); // Use array format
-        logger.info('Initial audio packet sent successfully');
-      }
-    }).catch(err => {
-      logger.error('Failed to send initial audio packet:', err);
-    });
 
     // Reusable buffers for energy calculation
     const sysData = new Float32Array(256);
@@ -483,7 +476,7 @@ export class GeminiLiveService {
       this.sessionPromise.then((session) => {
         // Double check connected state before sending to avoid "Deadline exceeded" on closed pipes
         if (this.isConnected) {
-          session.sendRealtimeInput([pcmBlob]); // Use array format
+          session.sendRealtimeInput({ media: pcmBlob }); // Use media object format (like working AI Studio version)
         } else {
           if (totalBlobsSent <= 5) {
             logger.warn(`Attempted to send blob #${totalBlobsSent} but not connected`);

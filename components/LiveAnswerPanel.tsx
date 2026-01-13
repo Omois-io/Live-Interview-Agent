@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { EmbeddedChunk, EmbeddingMatch } from '../services/embeddingService';
+import { KnowledgeItem } from '../types';
 
 interface LiveAnswerPanelProps {
   // Current question being answered
@@ -10,8 +11,10 @@ interface LiveAnswerPanelProps {
   isStreaming: boolean;
   // Matched Q&A items
   qaMatches: EmbeddingMatch[];
-  // Retrieved context chunks
+  // Retrieved context chunks (from embedding service)
   contextChunks: EmbeddedChunk[];
+  // RAG chunks actually sent to Gemini (from knowledge service)
+  ragChunks?: KnowledgeItem[];
   // Final preset answer (if matched)
   presetAnswer?: string;
   // Callback when user wants to use a different chunk
@@ -24,11 +27,13 @@ export function LiveAnswerPanel({
   isStreaming,
   qaMatches,
   contextChunks,
+  ragChunks = [],
   presetAnswer,
   onUseChunk,
 }: LiveAnswerPanelProps) {
-  const [showChunks, setShowChunks] = useState(true);
+  const [showChunks, setShowChunks] = useState(false);  // Hide left panel by default
   const [selectedChunkId, setSelectedChunkId] = useState<string | null>(null);
+  const [expandedChunkIndex, setExpandedChunkIndex] = useState<number | null>(null);
   const answerEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom of streaming answer
@@ -194,16 +199,55 @@ export function LiveAnswerPanel({
             ) : streamingAnswer ? (
               // Show streaming answer
               <div className="space-y-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-[10px] font-bold text-green-400 uppercase tracking-widest">
-                    Generated Response
-                  </span>
-                  {isStreaming && (
-                    <span className="text-[9px] bg-green-500/20 text-green-300 px-1.5 py-0.5 rounded animate-pulse">
-                      Streaming...
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold text-green-400 uppercase tracking-widest">
+                      Generated Response
                     </span>
+                    {isStreaming && (
+                      <span className="text-[9px] bg-green-500/20 text-green-300 px-1.5 py-0.5 rounded animate-pulse">
+                        Streaming...
+                      </span>
+                    )}
+                  </div>
+                  {/* Clickable Chunk Boxes - using RAG chunks sent to Gemini */}
+                  {ragChunks.length > 0 && (
+                    <div className="flex items-center gap-1">
+                      {ragChunks.slice(0, 5).map((chunk, index) => (
+                        <button
+                          key={chunk.id}
+                          onClick={() => setExpandedChunkIndex(expandedChunkIndex === index ? null : index)}
+                          className={`px-1.5 py-0.5 text-[9px] font-medium rounded border transition-all ${
+                            expandedChunkIndex === index
+                              ? 'bg-blue-500/30 border-blue-400 text-blue-300'
+                              : 'bg-gray-700/50 border-gray-600 text-gray-400 hover:bg-gray-600/50 hover:text-gray-300'
+                          }`}
+                        >
+                          {index + 1}
+                        </button>
+                      ))}
+                    </div>
                   )}
                 </div>
+                {/* Expanded Chunk View */}
+                {expandedChunkIndex !== null && ragChunks[expandedChunkIndex] && (
+                  <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/30 mb-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[9px] font-bold text-blue-400 uppercase tracking-widest">
+                        Chunk {expandedChunkIndex + 1}: {ragChunks[expandedChunkIndex].title}
+                      </span>
+                      <button
+                        onClick={() => setExpandedChunkIndex(null)}
+                        className="text-gray-400 hover:text-white text-xs"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <p className="text-xs text-gray-300 leading-relaxed whitespace-pre-wrap">
+                      {ragChunks[expandedChunkIndex].content}
+                    </p>
+                  </div>
+                )}
                 <div className="text-base text-gray-100 leading-relaxed font-light whitespace-pre-wrap">
                   {streamingAnswer}
                   {isStreaming && (
@@ -214,13 +258,54 @@ export function LiveAnswerPanel({
               </div>
             ) : (
               // Waiting state
-              <div className="flex flex-col items-center justify-center h-full text-gray-500">
-                <div className="text-lg font-medium mb-2">
-                  {isStreaming ? 'Generating answer...' : 'Waiting for response...'}
+              <div className="flex flex-col h-full text-gray-500">
+                {/* Chunk boxes at top right even in waiting state */}
+                {ragChunks.length > 0 && (
+                  <div className="flex justify-end mb-3">
+                    <div className="flex items-center gap-1">
+                      {ragChunks.slice(0, 5).map((chunk, index) => (
+                        <button
+                          key={chunk.id}
+                          onClick={() => setExpandedChunkIndex(expandedChunkIndex === index ? null : index)}
+                          className={`px-1.5 py-0.5 text-[9px] font-medium rounded border transition-all ${
+                            expandedChunkIndex === index
+                              ? 'bg-blue-500/30 border-blue-400 text-blue-300'
+                              : 'bg-gray-700/50 border-gray-600 text-gray-400 hover:bg-gray-600/50 hover:text-gray-300'
+                          }`}
+                        >
+                          {index + 1}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {/* Expanded Chunk View */}
+                {expandedChunkIndex !== null && ragChunks[expandedChunkIndex] && (
+                  <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/30 mb-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[9px] font-bold text-blue-400 uppercase tracking-widest">
+                        Chunk {expandedChunkIndex + 1}: {ragChunks[expandedChunkIndex].title}
+                      </span>
+                      <button
+                        onClick={() => setExpandedChunkIndex(null)}
+                        className="text-gray-400 hover:text-white text-xs"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <p className="text-xs text-gray-300 leading-relaxed whitespace-pre-wrap">
+                      {ragChunks[expandedChunkIndex].content}
+                    </p>
+                  </div>
+                )}
+                <div className="flex-1 flex flex-col items-center justify-center">
+                  <div className="text-lg font-medium mb-2">
+                    {isStreaming ? 'Generating answer...' : 'Waiting for response...'}
+                  </div>
+                  <p className="text-sm text-gray-600">
+                    The AI will generate an answer based on the detected question and your context.
+                  </p>
                 </div>
-                <p className="text-sm text-gray-600">
-                  The AI will generate an answer based on the detected question and your context.
-                </p>
               </div>
             )}
           </div>

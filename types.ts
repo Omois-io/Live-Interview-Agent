@@ -6,6 +6,18 @@ export interface InterviewQA {
   answer: string;
 }
 
+export interface KnowledgeItem {
+  id: string;
+  title: string;
+  content: string;
+  metadata: {
+    type: 'experience' | 'activity' | 'education' | 'other';
+    date?: string;
+    skills?: string[];
+  };
+  embedding?: number[];
+}
+
 export enum ConnectionState {
   DISCONNECTED = 'disconnected',
   CONNECTING = 'connecting',
@@ -23,7 +35,7 @@ export interface TranscriptItem {
   id: string;
   text: string;
   sender: 'user' | 'model';
-  speaker: 'interviewer' | 'you';
+  speaker: 'interviewer' | 'you' | 'ai';
   timestamp: number;
 }
 

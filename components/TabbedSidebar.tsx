@@ -521,9 +521,10 @@ export function TabbedSidebar({
                     {transcriptHistory.map(item => (
                       <div key={item.id} className="text-sm">
                         <span className={`text-[10px] uppercase font-bold ${
-                          item.speaker === 'you' ? 'text-green-400' : 'text-blue-400'
+                          item.speaker === 'you' ? 'text-green-400' :
+                          item.speaker === 'ai' ? 'text-purple-400' : 'text-blue-400'
                         }`}>
-                          {item.speaker === 'you' ? 'You' : 'Interviewer'}
+                          {item.speaker === 'you' ? 'You' : item.speaker === 'ai' ? 'AI' : 'Interviewer'}
                         </span>
                         <p className="text-gray-300 text-xs leading-snug">{item.text}</p>
                       </div>
