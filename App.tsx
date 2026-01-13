@@ -189,17 +189,6 @@ export default function App() {
     checkKey();
   }, []);
 
-  // Update suggestion's thoroughAnswer when generation completes
-  useEffect(() => {
-    if (!isThoroughGenerating && thoroughAnswer && currentSuggestionIdRef.current) {
-      const suggestionId = currentSuggestionIdRef.current;
-      setSuggestions(prev => prev.map(s =>
-        s.id === suggestionId
-          ? { ...s, thoroughAnswer }
-          : s
-      ));
-    }
-  }, [isThoroughGenerating, thoroughAnswer]);
 
   // Initialize embeddings on app load
   useEffect(() => {
@@ -730,6 +719,10 @@ ${activePreset.instructions}`;
 
         // Generate thorough answer in parallel (don't await - let it run async)
         (async () => {
+          // Capture the suggestion ID NOW, before any async work
+          // (otherwise the ref might be overwritten by a new question)
+          const suggestionIdToUpdate = currentSuggestionIdRef.current;
+
           try {
             const thoroughApiKey = isElectron && window.electronAPI
               ? await window.electronAPI.getApiKey()
@@ -743,6 +736,14 @@ ${activePreset.instructions}`;
               apiKey: thoroughApiKey,
             });
             setThoroughAnswer(result);
+
+            // Update the suggestion with thoroughAnswer immediately
+            if (suggestionIdToUpdate) {
+              logger.debug(`[App] Saving thoroughAnswer to suggestion ${suggestionIdToUpdate}`);
+              setSuggestions(prev => prev.map(s =>
+                s.id === suggestionIdToUpdate ? { ...s, thoroughAnswer: result } : s
+              ));
+            }
           } catch (err: any) {
             logger.error('[ThoroughAnswer] Generation failed:', err);
             setThoroughError(err?.message || 'Failed to generate thorough answer');
